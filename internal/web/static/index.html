@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>memoryelaine — Log Viewer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>memoryelaine</h1>
+            <div class="controls">
+                <select id="status-filter">
+                    <option value="">All Status</option>
+                    <option value="200">200</option>
+                    <option value="400">4xx</option>
+                    <option value="500">5xx</option>
+                </select>
+                <input id="path-filter" type="text" placeholder="Filter by path...">
+                <input id="search-filter" type="text" placeholder="Search bodies...">
+                <button id="refresh-btn">Refresh</button>
+                <label><input id="auto-refresh" type="checkbox"> Auto</label>
+            </div>
+        </header>
+        <table id="log-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Time</th>
+                    <th>Method</th>
+                    <th>Path</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Req Size</th>
+                    <th>Resp Size</th>
+                </tr>
+            </thead>
+            <tbody id="log-body"></tbody>
+        </table>
+        <div class="pagination">
+            <button id="prev-btn" disabled>← Prev</button>
+            <span id="page-info"></span>
+            <button id="next-btn">Next →</button>
+        </div>
+        <div id="detail-overlay" class="hidden">
+            <div class="detail-panel">
+                <button id="close-detail">✕</button>
+                <div id="detail-content"></div>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

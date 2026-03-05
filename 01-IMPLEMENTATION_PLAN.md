@@ -445,6 +445,7 @@ var redactedHeaders = map[string]struct{}{
 
 // RedactHeaders returns a shallow copy of the header map with sensitive
 // headers removed. The original is not modified.
+// Applied to BOTH request and response headers before DB serialization.
 func RedactHeaders(h http.Header) http.Header
 
 // HeadersToJSON serializes an http.Header to a JSON string.
@@ -503,9 +504,16 @@ func(req *http.Request) {
     MaxIdleConns:          100,
     MaxIdleConnsPerHost:   100,
     IdleConnTimeout:       90 * time.Second,
-    ResponseHeaderTimeout: cfg.Timeout, // 23 min
-    // No read/write deadline — we want unbounded streaming
+    // timeout_minutes bounds only connection setup + first byte:
+    ResponseHeaderTimeout: cfg.Timeout, // 23 min — time to first response byte
+    TLSHandshakeTimeout:  30 * time.Second,
+    // No per-stream read deadline — active streams run indefinitely
 }
+```
+
+**FlushInterval (critical for SSE zero-latency streaming):**
+```go
+rp.FlushInterval = -1 // immediate flush on every Write
 ```
 
 **ModifyResponse:** This is where we attach the response body tee:
@@ -551,18 +559,25 @@ func getHolder(r *http.Request) *captureHolder
 
 // Handler returns the top-level HTTP handler for the proxy port.
 //
+// Two proxy instances are used to avoid capture overhead on non-logged paths:
+//   rpPlain   — vanilla reverse proxy (no ModifyResponse hooks)
+//   rpCapture — reverse proxy with ModifyResponse tee for body capture
+//
 // Behavior:
-// 1. Check if r.URL.Path is in logPaths set.
-//    - If NO: proxy directly (no capture overhead). Use a plain reverse proxy.
-//    - If YES: proceed with capture.
+// 1. Check if r.URL.Path is in logPaths set (exact match).
+//    - If NO: proxy via rpPlain (zero capture overhead).
+//    - If YES: proceed with capture via rpCapture.
 // 2. Record start time.
-// 3. Read request body into cappedBuffer; replace r.Body with a replay reader.
+// 3. Wrap r.Body with teeReadCloser (stream-only; captured as upstream reads).
 // 4. Attach captureHolder to request context.
-// 5. Call reverseProxy.ServeHTTP(statusCapturingWriter, r).
-// 6. After ServeHTTP returns, build LogEntry from holder + status + timing.
-// 7. Enqueue LogEntry to LogWriter (fire-and-forget).
+// 5. Derive client_ip from r.RemoteAddr (host portion only; ignore XFF).
+// 6. Call rpCapture.ServeHTTP(statusCapturingWriter, r).
+// 7. After ServeHTTP returns, build LogEntry from holder + status + timing.
+//    Redact both request and response headers before serializing to JSON.
+// 8. Enqueue LogEntry to LogWriter (fire-and-forget).
 func Handler(
-    rp           *httputil.ReverseProxy,
+    rpPlain      *httputil.ReverseProxy,
+    rpCapture    *httputil.ReverseProxy,
     logPathSet   map[string]struct{},
     maxCapture   int,
     logWriter    *database.LogWriter,

@@ -1,0 +1,182 @@
+package database
+
+import (
+	"database/sql"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func setupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenWriter(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func insertTestEntries(t *testing.T, db *sql.DB, n int) {
+	t.Helper()
+	stmt, _ := db.Prepare(insertSQL)
+	defer stmt.Close()
+	now := time.Now().UnixMilli()
+	for i := 0; i < n; i++ {
+		code := 200
+		if i%3 == 0 {
+			code = 500
+		}
+		tsEnd := now + int64(i*100)
+		dur := int64(i * 100)
+		path := "/v1/chat/completions"
+		if i%2 == 0 {
+			path = "/v1/completions"
+		}
+		stmt.Exec(
+			now+int64(i), &tsEnd, &dur, "127.0.0.1",
+			"POST", path, "https://api.openai.com"+path, &code,
+			"{}", "{}",
+			`{"prompt":"test"}`, false, 17,
+			`{"text":"hello"}`, false, 16,
+			nil,
+		)
+	}
+}
+
+func TestReaderQuery_NoFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 10)
+
+	r := NewLogReader(db)
+	entries, err := r.Query(DefaultQueryFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 10 {
+		t.Errorf("expected 10, got %d", len(entries))
+	}
+	// Verify order (newest first)
+	if len(entries) >= 2 && entries[0].TsStart < entries[1].TsStart {
+		t.Error("expected descending order")
+	}
+}
+
+func TestReaderQuery_StatusFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 9)
+
+	r := NewLogReader(db)
+	status := 500
+	f := DefaultQueryFilter()
+	f.StatusCode = &status
+	entries, err := r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// indices 0,3,6 have status 500
+	if len(entries) != 3 {
+		t.Errorf("expected 3 entries with status 500, got %d", len(entries))
+	}
+}
+
+func TestReaderQuery_PathFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 10)
+
+	r := NewLogReader(db)
+	path := "/v1/completions"
+	f := DefaultQueryFilter()
+	f.Path = &path
+	entries, err := r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// even indices: 0,2,4,6,8
+	if len(entries) != 5 {
+		t.Errorf("expected 5, got %d", len(entries))
+	}
+}
+
+func TestReaderGetByID(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 1)
+
+	r := NewLogReader(db)
+	e, err := r.GetByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.RequestMethod != "POST" {
+		t.Errorf("expected POST, got %s", e.RequestMethod)
+	}
+}
+
+func TestReaderGetByID_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	r := NewLogReader(db)
+	_, err := r.GetByID(999)
+	if err != sql.ErrNoRows {
+		t.Errorf("expected ErrNoRows, got %v", err)
+	}
+}
+
+func TestReaderCount(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 7)
+
+	r := NewLogReader(db)
+	count, err := r.Count(DefaultQueryFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 7 {
+		t.Errorf("expected 7, got %d", count)
+	}
+}
+
+func TestReaderDeleteBefore(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 10)
+
+	r := NewLogReader(db)
+	// Delete everything before a point in the future
+	deleted, err := r.DeleteBefore(time.Now().UnixMilli() + 100000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 10 {
+		t.Errorf("expected 10 deleted, got %d", deleted)
+	}
+
+	count, _ := r.Count(DefaultQueryFilter())
+	if count != 0 {
+		t.Errorf("expected 0 remaining, got %d", count)
+	}
+}
+
+func TestReaderQuery_SearchFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	insertTestEntries(t, db, 5)
+
+	r := NewLogReader(db)
+	search := "hello"
+	f := DefaultQueryFilter()
+	f.Search = &search
+	entries, err := r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 5 {
+		t.Errorf("expected 5 (all match resp_body), got %d", len(entries))
+	}
+}
