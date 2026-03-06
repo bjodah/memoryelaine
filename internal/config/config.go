@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -39,7 +40,8 @@ type DatabaseConfig struct {
 }
 
 type LoggingConfig struct {
-	MaxCaptureBytes int `mapstructure:"max_capture_bytes"`
+	MaxCaptureBytes int    `mapstructure:"max_capture_bytes"`
+	Level           string `mapstructure:"level"`
 }
 
 // Load reads configuration using viper.
@@ -57,6 +59,7 @@ func Load(cfgPath string) (*Config, error) {
 	v.SetDefault("management.auth.password", "changeme")
 	v.SetDefault("database.path", "./memoryelaine.db")
 	v.SetDefault("logging.max_capture_bytes", 8388608)
+	v.SetDefault("logging.level", "info")
 
 	if cfgPath != "" {
 		v.SetConfigFile(cfgPath)
@@ -103,6 +106,10 @@ func (c *Config) validate() error {
 		return fmt.Errorf("max_capture_bytes must be > 0, got %d", c.Logging.MaxCaptureBytes)
 	}
 
+	if _, err := ParseLogLevel(c.Logging.Level); err != nil {
+		return err
+	}
+
 	if len(c.Proxy.LogPaths) == 0 {
 		return fmt.Errorf("log_paths must not be empty")
 	}
@@ -112,4 +119,19 @@ func (c *Config) validate() error {
 	}
 
 	return nil
+}
+
+func ParseLogLevel(level string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("logging.level must be one of debug, info, warn, error, got %q", level)
+	}
 }

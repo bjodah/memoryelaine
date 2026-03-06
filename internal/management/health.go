@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -28,6 +29,8 @@ func healthHandler(reader *database.LogReader, writer *database.LogWriter) http.
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			slog.Error("encoding health response", "error", err)
+		}
 	}
 }

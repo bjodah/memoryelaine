@@ -52,8 +52,8 @@ func setupProxyTest(t *testing.T, upstreamHandler http.HandlerFunc) (
 	cleanup := func() {
 		cancel()
 		time.Sleep(50 * time.Millisecond)
-		lw.Close()
-		db.Close()
+		mustClose(t, lw)
+		mustClose(t, db)
 		upstream.Close()
 	}
 
@@ -64,7 +64,7 @@ func TestHandler_PassThrough(t *testing.T) {
 	handler, _, cleanup, _ := setupProxyTest(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"result":"ok"}`))
+		mustWrite(t, w, []byte(`{"result":"ok"}`))
 	})
 	defer cleanup()
 
@@ -85,7 +85,7 @@ func TestHandler_PassThrough(t *testing.T) {
 func TestHandler_NonLogPath_Bypasses(t *testing.T) {
 	handler, lw, cleanup, _ := setupProxyTest(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("models list"))
+		mustWrite(t, w, []byte("models list"))
 	})
 	defer cleanup()
 
@@ -115,7 +115,9 @@ func TestHandler_SSEStreaming(t *testing.T) {
 			t.Fatal("expected Flusher")
 		}
 		for i := 0; i < 5; i++ {
-			fmt.Fprintf(w, "data: chunk %d\n\n", i)
+			if _, err := fmt.Fprintf(w, "data: chunk %d\n\n", i); err != nil {
+				t.Fatal(err)
+			}
 			flusher.Flush()
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -137,7 +139,7 @@ func TestHandler_Truncation(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Write 2048 bytes but capture limit is 100
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(strings.Repeat("x", 2048)))
+		mustWrite(t, w, []byte(strings.Repeat("x", 2048)))
 	}))
 	defer upstream.Close()
 
@@ -148,10 +150,16 @@ func TestHandler_Truncation(t *testing.T) {
 	rpCapture := NewReverseProxy(upstreamURL, 5*time.Second, maxCapture)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, _ := database.OpenWriter(dbPath)
-	defer db.Close()
-	lw, _ := database.NewLogWriter(db, 100)
-	defer lw.Close()
+	db, err := database.OpenWriter(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, db)
+	lw, err := database.NewLogWriter(db, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, lw)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go lw.Run(ctx)
@@ -174,8 +182,11 @@ func TestHandler_Truncation(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify DB has truncated entry
-	rdb, _ := database.OpenReader(dbPath)
-	defer rdb.Close()
+	rdb, err := database.OpenReader(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, rdb)
 	reader := database.NewLogReader(rdb)
 	entries, err := reader.Query(database.DefaultQueryFilter())
 	if err != nil {
@@ -200,8 +211,10 @@ func TestHandler_RedactionInDB(t *testing.T) {
 	handler, _, cleanup, _ := setupProxyTest(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Set-Cookie", "session=secret")
 		w.WriteHeader(http.StatusOK)
-		io.ReadAll(r.Body)
-		w.Write([]byte("ok"))
+		if _, err := io.ReadAll(r.Body); err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, w, []byte("ok"))
 	})
 	defer cleanup()
 

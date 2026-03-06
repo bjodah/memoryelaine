@@ -24,8 +24,8 @@ type LogEntry struct {
 
 // QueryFilter defines parameters for querying log entries.
 type QueryFilter struct {
-	Limit     int
-	Offset    int
+	Limit      int
+	Offset     int
 	StatusCode *int
 	Path       *string
 	Since      *int64

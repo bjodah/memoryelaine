@@ -25,6 +25,7 @@ database:
   path: "/tmp/test.db"
 logging:
   max_capture_bytes: 1024
+  level: "debug"
 `
 	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
 		t.Fatal(err)
@@ -44,6 +45,9 @@ logging:
 	if cfg.Logging.MaxCaptureBytes != 1024 {
 		t.Errorf("expected max_capture_bytes 1024, got %d", cfg.Logging.MaxCaptureBytes)
 	}
+	if cfg.Logging.Level != "debug" {
+		t.Errorf("expected logging level debug, got %q", cfg.Logging.Level)
+	}
 }
 
 func TestLoad_Defaults(t *testing.T) {
@@ -60,10 +64,19 @@ func TestLoad_Defaults(t *testing.T) {
 
 func TestLoad_DefaultsNoExplicitPath(t *testing.T) {
 	// Change to a dir with no config.yaml to trigger defaults
-	origDir, _ := os.Getwd()
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	os.Chdir(dir)
-	defer os.Chdir(origDir)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(origDir); err != nil {
+			t.Errorf("restoring working directory: %v", err)
+		}
+	}()
 
 	cfg, err := Load("")
 	if err != nil {
@@ -74,6 +87,9 @@ func TestLoad_DefaultsNoExplicitPath(t *testing.T) {
 	}
 	if cfg.Logging.MaxCaptureBytes != 8388608 {
 		t.Errorf("expected default max_capture_bytes, got %d", cfg.Logging.MaxCaptureBytes)
+	}
+	if cfg.Logging.Level != "info" {
+		t.Errorf("expected default logging level info, got %q", cfg.Logging.Level)
 	}
 }
 
@@ -90,7 +106,9 @@ management:
 logging:
   max_capture_bytes: 1024
 `
-	os.WriteFile(cfgPath, []byte(data), 0644)
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
 	_, err := Load(cfgPath)
 	if err == nil {
 		t.Fatal("expected validation error for bad URL")
@@ -110,7 +128,9 @@ management:
 logging:
   max_capture_bytes: 1024
 `
-	os.WriteFile(cfgPath, []byte(data), 0644)
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
 	_, err := Load(cfgPath)
 	if err == nil {
 		t.Fatal("expected validation error for port collision")
@@ -130,9 +150,34 @@ management:
 logging:
   max_capture_bytes: 0
 `
-	os.WriteFile(cfgPath, []byte(data), 0644)
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
 	_, err := Load(cfgPath)
 	if err == nil {
 		t.Fatal("expected validation error for zero capture bytes")
+	}
+}
+
+func TestValidate_BadLogLevel(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	data := `
+proxy:
+  listen_addr: ":8000"
+  upstream_base_url: "https://example.com"
+  log_paths: ["/test"]
+management:
+  listen_addr: ":8080"
+logging:
+  max_capture_bytes: 1024
+  level: "verbose"
+`
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error for invalid log level")
 	}
 }

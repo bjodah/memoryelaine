@@ -19,6 +19,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func logClose(resource string, closer interface{ Close() error }) {
+	if err := closer.Close(); err != nil {
+		slog.Error("close failed", "resource", resource, "error", err)
+	}
+}
+
+func shutdownServer(ctx context.Context, name string, srv *http.Server) {
+	if err := srv.Shutdown(ctx); err != nil && err != http.ErrServerClosed {
+		slog.Error("shutdown failed", "server", name, "error", err)
+	}
+}
+
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the proxy and management servers",
@@ -30,18 +42,23 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	// 1. Set up structured logging
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-
-	// 2. Load config
+	// 1. Load config
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
 	}
+
+	// 2. Set up structured logging
+	level, err := config.ParseLogLevel(cfg.Logging.Level)
+	if err != nil {
+		return err
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 	slog.Info("config loaded",
 		"proxy_addr", cfg.Proxy.ListenAddr,
 		"management_addr", cfg.Management.ListenAddr,
 		"upstream", cfg.Proxy.UpstreamBaseURL,
+		"log_level", cfg.Logging.Level,
 	)
 
 	// 3. Open databases
@@ -51,15 +68,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	readerDB, err := database.OpenReader(cfg.Database.Path)
 	if err != nil {
-		writerDB.Close()
+		logClose("writer database", writerDB)
 		return err
 	}
 
 	// 4. Create LogWriter and start background worker
 	logWriter, err := database.NewLogWriter(writerDB, 1000)
 	if err != nil {
-		writerDB.Close()
-		readerDB.Close()
+		logClose("writer database", writerDB)
+		logClose("reader database", readerDB)
 		return err
 	}
 
@@ -75,8 +92,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	upstream, err := url.Parse(cfg.Proxy.UpstreamBaseURL)
 	if err != nil {
 		writerCancel()
-		writerDB.Close()
-		readerDB.Close()
+		logClose("writer database", writerDB)
+		logClose("reader database", readerDB)
 		return err
 	}
 
@@ -138,13 +155,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	proxyServer.Shutdown(shutCtx)
-	mgmtServer.Shutdown(shutCtx)
+	shutdownServer(shutCtx, "proxy", proxyServer)
+	shutdownServer(shutCtx, "management", mgmtServer)
 	writerCancel()
 	wg.Wait()
-	logWriter.Close()
-	writerDB.Close()
-	readerDB.Close()
+	logClose("log writer", logWriter)
+	logClose("writer database", writerDB)
+	logClose("reader database", readerDB)
 
 	slog.Info("shutdown complete")
 	return nil

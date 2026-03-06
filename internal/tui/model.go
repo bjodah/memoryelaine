@@ -168,13 +168,13 @@ func (m Model) View() string {
 }
 
 var (
-	headerStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	cursorStyle  = lipgloss.NewStyle().Background(lipgloss.Color("236")).Bold(true)
-	statusOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	statusWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	statusErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	helpStyle    = lipgloss.NewStyle().Faint(true)
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).MarginBottom(1)
+	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	cursorStyle = lipgloss.NewStyle().Background(lipgloss.Color("236")).Bold(true)
+	statusOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	statusWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	statusErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	helpStyle   = lipgloss.NewStyle().Faint(true)
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).MarginBottom(1)
 )
 
 func (m Model) tableView() string {
@@ -193,7 +193,7 @@ func (m Model) tableView() string {
 	b.WriteString("\n")
 
 	if m.err != nil {
-		b.WriteString(fmt.Sprintf("Error: %v\n", m.err))
+		fmt.Fprintf(&b, "Error: %v\n", m.err)
 	}
 
 	for i, e := range m.entries {
@@ -225,7 +225,7 @@ func (m Model) tableView() string {
 
 	page := m.filter.Offset/m.filter.Limit + 1
 	pages := int(m.total)/m.filter.Limit + 1
-	b.WriteString(fmt.Sprintf("\nPage %d/%d", page, pages))
+	fmt.Fprintf(&b, "\nPage %d/%d", page, pages)
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("j/k:navigate  enter:detail  r:refresh  n/p:page  f:filter  q:quit"))
 
@@ -336,8 +336,28 @@ func truncLabel(t bool) string {
 	return ""
 }
 
-func fmtMs(ms int64) string      { return time.UnixMilli(ms).Format("2006-01-02 15:04:05") }
-func fmtMsPtr(ms *int64) string  { if ms != nil { return fmtMs(*ms) }; return "—" }
-func fmtDur(ms *int64) string    { if ms != nil { return fmt.Sprintf("%dms", *ms) }; return "—" }
-func fmtStrPtr(s *string) string { if s != nil { return *s }; return "—" }
-func fmtStatusPtr(s *int) string { if s != nil { return strconv.Itoa(*s) }; return "—" }
+func fmtMs(ms int64) string { return time.UnixMilli(ms).Format("2006-01-02 15:04:05") }
+func fmtMsPtr(ms *int64) string {
+	if ms != nil {
+		return fmtMs(*ms)
+	}
+	return "—"
+}
+func fmtDur(ms *int64) string {
+	if ms != nil {
+		return fmt.Sprintf("%dms", *ms)
+	}
+	return "—"
+}
+func fmtStrPtr(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return "—"
+}
+func fmtStatusPtr(s *int) string {
+	if s != nil {
+		return strconv.Itoa(*s)
+	}
+	return "—"
+}

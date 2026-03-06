@@ -19,8 +19,11 @@ func setupTestDB(t *testing.T) *sql.DB {
 
 func insertTestEntries(t *testing.T, db *sql.DB, n int) {
 	t.Helper()
-	stmt, _ := db.Prepare(insertSQL)
-	defer stmt.Close()
+	stmt, err := db.Prepare(insertSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, stmt)
 	now := time.Now().UnixMilli()
 	for i := 0; i < n; i++ {
 		code := 200
@@ -33,20 +36,22 @@ func insertTestEntries(t *testing.T, db *sql.DB, n int) {
 		if i%2 == 0 {
 			path = "/v1/completions"
 		}
-		stmt.Exec(
+		if _, err := stmt.Exec(
 			now+int64(i), &tsEnd, &dur, "127.0.0.1",
 			"POST", path, "https://api.openai.com"+path, &code,
 			"{}", "{}",
 			`{"prompt":"test"}`, false, 17,
 			`{"text":"hello"}`, false, 16,
 			nil,
-		)
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestReaderQuery_NoFilter(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 10)
 
 	r := NewLogReader(db)
@@ -65,7 +70,7 @@ func TestReaderQuery_NoFilter(t *testing.T) {
 
 func TestReaderQuery_StatusFilter(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 9)
 
 	r := NewLogReader(db)
@@ -84,7 +89,7 @@ func TestReaderQuery_StatusFilter(t *testing.T) {
 
 func TestReaderQuery_PathFilter(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 10)
 
 	r := NewLogReader(db)
@@ -103,7 +108,7 @@ func TestReaderQuery_PathFilter(t *testing.T) {
 
 func TestReaderGetByID(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 1)
 
 	r := NewLogReader(db)
@@ -118,7 +123,7 @@ func TestReaderGetByID(t *testing.T) {
 
 func TestReaderGetByID_NotFound(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 
 	r := NewLogReader(db)
 	_, err := r.GetByID(999)
@@ -129,7 +134,7 @@ func TestReaderGetByID_NotFound(t *testing.T) {
 
 func TestReaderCount(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 7)
 
 	r := NewLogReader(db)
@@ -144,7 +149,7 @@ func TestReaderCount(t *testing.T) {
 
 func TestReaderDeleteBefore(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 10)
 
 	r := NewLogReader(db)
@@ -157,7 +162,10 @@ func TestReaderDeleteBefore(t *testing.T) {
 		t.Errorf("expected 10 deleted, got %d", deleted)
 	}
 
-	count, _ := r.Count(DefaultQueryFilter())
+	count, err := r.Count(DefaultQueryFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if count != 0 {
 		t.Errorf("expected 0 remaining, got %d", count)
 	}
@@ -165,7 +173,7 @@ func TestReaderDeleteBefore(t *testing.T) {
 
 func TestReaderQuery_SearchFilter(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer mustClose(t, db)
 	insertTestEntries(t, db, 5)
 
 	r := NewLogReader(db)

@@ -46,7 +46,7 @@ func init() {
 	rootCmd.AddCommand(logCmd)
 }
 
-func runLog(cmd *cobra.Command, args []string) error {
+func runLog(cmd *cobra.Command, args []string) (err error) {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
@@ -56,7 +56,11 @@ func runLog(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("closing database: %w", closeErr)
+		}
+	}()
 
 	reader := database.NewLogReader(db)
 
@@ -120,7 +124,9 @@ func outputEntries(entries []database.LogEntry) error {
 		return nil
 	case "table":
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tTIME\tMETHOD\tPATH\tSTATUS\tDURATION\tREQ SIZE\tRESP SIZE")
+		if _, err := fmt.Fprintln(w, "ID\tTIME\tMETHOD\tPATH\tSTATUS\tDURATION\tREQ SIZE\tRESP SIZE"); err != nil {
+			return err
+		}
 		for _, e := range entries {
 			status := "—"
 			if e.StatusCode != nil {
@@ -131,9 +137,11 @@ func outputEntries(entries []database.LogEntry) error {
 				dur = fmt.Sprintf("%dms", *e.DurationMs)
 			}
 			t := time.UnixMilli(e.TsStart).Format("15:04:05")
-			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
+			if _, err := fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%d\t%d\n",
 				e.ID, t, e.RequestMethod, e.RequestPath,
-				status, dur, e.ReqBytes, e.RespBytes)
+				status, dur, e.ReqBytes, e.RespBytes); err != nil {
+				return err
+			}
 		}
 		return w.Flush()
 	default:
@@ -176,4 +184,3 @@ func parseTimeArg(s string) (int64, error) {
 
 	return time.Now().Add(-d).UnixMilli(), nil
 }
-

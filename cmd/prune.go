@@ -26,11 +26,13 @@ func init() {
 	pruneCmd.Flags().IntVar(&pruneKeepDays, "keep-days", 0, "Delete records older than this many days (required)")
 	pruneCmd.Flags().BoolVar(&pruneVacuum, "vacuum", false, "Run VACUUM after deletion (may be slow)")
 	pruneCmd.Flags().BoolVar(&pruneDryRun, "dry-run", false, "Print count without deleting")
-	pruneCmd.MarkFlagRequired("keep-days")
+	if err := pruneCmd.MarkFlagRequired("keep-days"); err != nil {
+		panic(err)
+	}
 	rootCmd.AddCommand(pruneCmd)
 }
 
-func runPrune(cmd *cobra.Command, args []string) error {
+func runPrune(cmd *cobra.Command, args []string) (err error) {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		return err
@@ -40,7 +42,11 @@ func runPrune(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("closing database: %w", closeErr)
+		}
+	}()
 
 	cutoff := time.Now().AddDate(0, 0, -pruneKeepDays).UnixMilli()
 	reader := database.NewLogReader(db)

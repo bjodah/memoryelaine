@@ -11,7 +11,7 @@ func TestOpenWriter_CreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWriter failed: %v", err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	// Verify table exists
 	var name string
@@ -27,7 +27,7 @@ func TestOpenReader_CreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReader failed: %v", err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	if err := db.Ping(); err != nil {
 		t.Fatalf("ping failed: %v", err)
@@ -40,13 +40,13 @@ func TestMigrate_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	db.Close()
+	mustClose(t, db)
 
 	db, err = OpenWriter(dbPath)
 	if err != nil {
 		t.Fatalf("second open (idempotent migrate): %v", err)
 	}
-	db.Close()
+	mustClose(t, db)
 }
 
 func TestWALMode(t *testing.T) {
@@ -55,10 +55,12 @@ func TestWALMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	var mode string
-	db.QueryRow("PRAGMA journal_mode").Scan(&mode)
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("scan journal mode: %v", err)
+	}
 	if mode != "wal" {
 		t.Errorf("expected WAL mode, got %s", mode)
 	}

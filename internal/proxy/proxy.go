@@ -20,7 +20,6 @@ func NewReverseProxy(upstream *url.URL, timeout time.Duration, maxCapture int) *
 			req.URL.Scheme = upstream.Scheme
 			req.URL.Host = upstream.Host
 			req.URL.Path = singleJoiningSlash(upstream.Path, req.URL.Path)
-			req.URL.RawQuery = req.URL.RawQuery
 			req.Host = upstream.Host
 		},
 		Transport: &http.Transport{
@@ -39,7 +38,7 @@ func NewReverseProxy(upstream *url.URL, timeout time.Duration, maxCapture int) *
 		FlushInterval: -1, // immediate flush for SSE zero-latency streaming
 		ModifyResponse: func(resp *http.Response) error {
 			if holder := getHolder(resp.Request); holder != nil {
-				tee := newTeeReadCloser(resp.Body, maxCapture)
+				tee := newTeeReadCloserWithCallback(resp.Body, maxCapture, holder.onResponseReady)
 				resp.Body = tee
 				holder.respTee = tee
 			}
@@ -64,7 +63,6 @@ func NewPlainReverseProxy(upstream *url.URL, timeout time.Duration) *httputil.Re
 			req.URL.Scheme = upstream.Scheme
 			req.URL.Host = upstream.Host
 			req.URL.Path = singleJoiningSlash(upstream.Path, req.URL.Path)
-			req.URL.RawQuery = req.URL.RawQuery
 			req.Host = upstream.Host
 		},
 		Transport: &http.Transport{
@@ -107,13 +105,18 @@ func Handler(
 		upstreamURL := upstream.Scheme + "://" + upstream.Host + singleJoiningSlash(upstream.Path, r.URL.Path)
 
 		// Capture request body via tee (stream-only; zero added latency)
-		reqTee := newTeeReadCloser(r.Body, maxCapture)
+		reqTee := newTeeReadCloserWithCallback(r.Body, maxCapture, func(buf *cappedBuffer) {
+			logWriter.SetLastRequest(string(buf.Bytes()))
+		})
 		r.Body = reqTee
 
 		// Build holder and attach to request context
 		holder := &captureHolder{
 			reqTee:    reqTee,
 			startTime: startTime,
+			onResponseReady: func(buf *cappedBuffer) {
+				logWriter.SetLastResponse(string(buf.Bytes()))
+			},
 		}
 		r = setHolder(r, holder)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 )
 
@@ -13,6 +14,18 @@ type LogWriter struct {
 	queue      chan LogEntry
 	dropped    atomic.Int64
 	insertStmt *sql.Stmt
+	last       lastBodies
+}
+
+type bodySnapshot struct {
+	body  string
+	valid bool
+}
+
+type lastBodies struct {
+	mu       sync.RWMutex
+	request  bodySnapshot
+	response bodySnapshot
 }
 
 const insertSQL = `INSERT INTO openai_logs (
@@ -66,6 +79,34 @@ func (w *LogWriter) Run(ctx context.Context) {
 // DroppedCount returns the number of dropped log entries.
 func (w *LogWriter) DroppedCount() int64 {
 	return w.dropped.Load()
+}
+
+// SetLastRequest stores the most recently captured request body.
+func (w *LogWriter) SetLastRequest(body string) {
+	w.last.mu.Lock()
+	defer w.last.mu.Unlock()
+	w.last.request = bodySnapshot{body: body, valid: true}
+}
+
+// LastRequest returns the most recently captured request body.
+func (w *LogWriter) LastRequest() (string, bool) {
+	w.last.mu.RLock()
+	defer w.last.mu.RUnlock()
+	return w.last.request.body, w.last.request.valid
+}
+
+// SetLastResponse stores the most recently captured response body.
+func (w *LogWriter) SetLastResponse(body string) {
+	w.last.mu.Lock()
+	defer w.last.mu.Unlock()
+	w.last.response = bodySnapshot{body: body, valid: true}
+}
+
+// LastResponse returns the most recently captured response body.
+func (w *LogWriter) LastResponse() (string, bool) {
+	w.last.mu.RLock()
+	defer w.last.mu.RUnlock()
+	return w.last.response.body, w.last.response.valid
 }
 
 // Close closes the prepared statement.

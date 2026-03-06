@@ -39,7 +39,6 @@ func (r *LogReader) Query(filter QueryFilter) ([]LogEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying logs: %w", err)
 	}
-	defer rows.Close()
 
 	var entries []LogEntry
 	for rows.Next() {
@@ -56,7 +55,16 @@ func (r *LogReader) Query(filter QueryFilter) ([]LogEntry, error) {
 		}
 		entries = append(entries, e)
 	}
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, fmt.Errorf("iterating log rows: %w (close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("iterating log rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing log rows: %w", err)
+	}
+	return entries, nil
 }
 
 // GetByID returns a single log entry or sql.ErrNoRows.
@@ -64,6 +72,24 @@ func (r *LogReader) GetByID(id int64) (*LogEntry, error) {
 	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error FROM openai_logs WHERE id = ?"
 	var e LogEntry
 	err := r.db.QueryRow(query, id).Scan(
+		&e.ID, &e.TsStart, &e.TsEnd, &e.DurationMs, &e.ClientIP,
+		&e.RequestMethod, &e.RequestPath, &e.UpstreamURL, &e.StatusCode,
+		&e.ReqHeadersJSON, &e.RespHeadersJSON,
+		&e.ReqBody, &e.ReqTruncated, &e.ReqBytes,
+		&e.RespBody, &e.RespTruncated, &e.RespBytes,
+		&e.Error,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// GetLatest returns the most recently inserted log entry or sql.ErrNoRows.
+func (r *LogReader) GetLatest() (*LogEntry, error) {
+	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error FROM openai_logs ORDER BY id DESC LIMIT 1"
+	var e LogEntry
+	err := r.db.QueryRow(query).Scan(
 		&e.ID, &e.TsStart, &e.TsEnd, &e.DurationMs, &e.ClientIP,
 		&e.RequestMethod, &e.RequestPath, &e.UpstreamURL, &e.StatusCode,
 		&e.ReqHeadersJSON, &e.RespHeadersJSON,

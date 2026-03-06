@@ -67,12 +67,16 @@ func openAndMigrate(dbPath string) (*sql.DB, error) {
 	}
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, fmt.Errorf("migrating database: %w (close error: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("migrating database: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, fmt.Errorf("pinging database: %w (close error: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 

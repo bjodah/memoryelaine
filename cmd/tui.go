@@ -11,7 +11,7 @@ import (
 var tuiCmd = &cobra.Command{
 	Use:   "tui",
 	Short: "Interactive terminal UI for browsing logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		cfg, err := config.Load(cfgFile)
 		if err != nil {
 			return err
@@ -20,7 +20,11 @@ var tuiCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer db.Close()
+		defer func() {
+			if closeErr := db.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}()
 		return tui.Run(database.NewLogReader(db))
 	},
 }

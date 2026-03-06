@@ -11,7 +11,7 @@ import (
 
 func TestCappedBuffer_BelowCap(t *testing.T) {
 	cb := newCappedBuffer(100)
-	cb.Write([]byte("hello"))
+	mustWrite(t, cb, []byte("hello"))
 	if string(cb.Bytes()) != "hello" {
 		t.Errorf("expected 'hello', got %q", cb.Bytes())
 	}
@@ -25,7 +25,7 @@ func TestCappedBuffer_BelowCap(t *testing.T) {
 
 func TestCappedBuffer_AtCap(t *testing.T) {
 	cb := newCappedBuffer(5)
-	cb.Write([]byte("hello"))
+	mustWrite(t, cb, []byte("hello"))
 	if string(cb.Bytes()) != "hello" {
 		t.Errorf("expected 'hello', got %q", cb.Bytes())
 	}
@@ -36,7 +36,7 @@ func TestCappedBuffer_AtCap(t *testing.T) {
 
 func TestCappedBuffer_AboveCap(t *testing.T) {
 	cb := newCappedBuffer(5)
-	cb.Write([]byte("hello world"))
+	mustWrite(t, cb, []byte("hello world"))
 	if string(cb.Bytes()) != "hello" {
 		t.Errorf("expected 'hello', got %q", cb.Bytes())
 	}
@@ -50,8 +50,8 @@ func TestCappedBuffer_AboveCap(t *testing.T) {
 
 func TestCappedBuffer_MultipleWrites(t *testing.T) {
 	cb := newCappedBuffer(8)
-	cb.Write([]byte("hello"))
-	cb.Write([]byte(" world"))
+	mustWrite(t, cb, []byte("hello"))
+	mustWrite(t, cb, []byte(" world"))
 	if string(cb.Bytes()) != "hello wo" {
 		t.Errorf("expected 'hello wo', got %q", cb.Bytes())
 	}
@@ -62,7 +62,7 @@ func TestCappedBuffer_MultipleWrites(t *testing.T) {
 		t.Error("should be truncated")
 	}
 	// Further writes after truncation still count
-	cb.Write([]byte("more"))
+	mustWrite(t, cb, []byte("more"))
 	if cb.TotalBytes() != 15 {
 		t.Errorf("expected 15, got %d", cb.TotalBytes())
 	}
@@ -102,7 +102,7 @@ func TestStatusCapturingWriter(t *testing.T) {
 	sw := newStatusCapturingWriter(rec)
 
 	sw.WriteHeader(http.StatusNotFound)
-	sw.Write([]byte("not found"))
+	mustWrite(t, sw, []byte("not found"))
 
 	if sw.statusCode != 404 {
 		t.Errorf("expected 404, got %d", sw.statusCode)
@@ -116,7 +116,7 @@ func TestStatusCapturingWriter_DefaultStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sw := newStatusCapturingWriter(rec)
 
-	sw.Write([]byte("ok"))
+	mustWrite(t, sw, []byte("ok"))
 	if sw.statusCode != 200 {
 		t.Errorf("expected default 200, got %d", sw.statusCode)
 	}

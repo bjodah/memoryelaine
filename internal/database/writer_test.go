@@ -13,26 +13,26 @@ func TestWriterEnqueueAndInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	w, err := NewLogWriter(db, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer mustClose(t, w)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go w.Run(ctx)
 
 	entry := LogEntry{
-		TsStart:       time.Now().UnixMilli(),
-		ClientIP:      "127.0.0.1",
-		RequestMethod: "POST",
-		RequestPath:   "/v1/chat/completions",
-		UpstreamURL:   "https://api.openai.com/v1/chat/completions",
+		TsStart:        time.Now().UnixMilli(),
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
 		ReqHeadersJSON: "{}",
-		ReqBody:       `{"model":"gpt-4"}`,
-		ReqBytes:      18,
+		ReqBody:        `{"model":"gpt-4"}`,
+		ReqBytes:       18,
 	}
 
 	if !w.Enqueue(entry) {
@@ -45,7 +45,9 @@ func TestWriterEnqueueAndInsert(t *testing.T) {
 
 	// Verify it was inserted
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM openai_logs").Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM openai_logs").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
 	if count != 1 {
 		t.Errorf("expected 1 row, got %d", count)
 	}
@@ -57,20 +59,20 @@ func TestWriterDropsWhenFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	w, err := NewLogWriter(db, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer mustClose(t, w)
 
 	// Don't start the worker — channel will fill up
 	entry := LogEntry{
-		TsStart:       time.Now().UnixMilli(),
-		RequestMethod: "POST",
-		RequestPath:   "/test",
-		UpstreamURL:   "http://localhost",
+		TsStart:        time.Now().UnixMilli(),
+		RequestMethod:  "POST",
+		RequestPath:    "/test",
+		UpstreamURL:    "http://localhost",
 		ReqHeadersJSON: "{}",
 	}
 
@@ -88,21 +90,21 @@ func TestWriterDrainsOnShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer mustClose(t, db)
 
 	w, err := NewLogWriter(db, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer mustClose(t, w)
 
 	// Enqueue entries before starting the worker
 	for i := 0; i < 5; i++ {
 		w.Enqueue(LogEntry{
-			TsStart:       time.Now().UnixMilli(),
-			RequestMethod: "GET",
-			RequestPath:   "/test",
-			UpstreamURL:   "http://localhost",
+			TsStart:        time.Now().UnixMilli(),
+			RequestMethod:  "GET",
+			RequestPath:    "/test",
+			UpstreamURL:    "http://localhost",
 			ReqHeadersJSON: "{}",
 		})
 	}
@@ -113,7 +115,9 @@ func TestWriterDrainsOnShutdown(t *testing.T) {
 	w.Run(ctx)
 
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM openai_logs").Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM openai_logs").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
 	if count != 5 {
 		t.Errorf("expected 5 drained rows, got %d", count)
 	}

@@ -3,6 +3,7 @@ package proxy
 import (
 	"io"
 	"net/http"
+	"sync"
 )
 
 // cappedBuffer captures bytes up to a maximum, but always counts total bytes seen.
@@ -50,25 +51,47 @@ func (c *cappedBuffer) Truncated() bool   { return c.truncated }
 type teeReadCloser struct {
 	source io.ReadCloser
 	tee    *cappedBuffer
+	onDone func(*cappedBuffer)
+	done   sync.Once
 }
 
 func newTeeReadCloser(rc io.ReadCloser, maxBytes int) *teeReadCloser {
+	return newTeeReadCloserWithCallback(rc, maxBytes, nil)
+}
+
+func newTeeReadCloserWithCallback(rc io.ReadCloser, maxBytes int, onDone func(*cappedBuffer)) *teeReadCloser {
 	return &teeReadCloser{
 		source: rc,
 		tee:    newCappedBuffer(maxBytes),
+		onDone: onDone,
 	}
 }
 
 func (t *teeReadCloser) Read(p []byte) (int, error) {
 	n, err := t.source.Read(p)
 	if n > 0 {
-		t.tee.Write(p[:n])
+		if _, teeErr := t.tee.Write(p[:n]); teeErr != nil && err == nil {
+			err = teeErr
+		}
+	}
+	if err == io.EOF {
+		t.finish()
 	}
 	return n, err
 }
 
 func (t *teeReadCloser) Close() error {
-	return t.source.Close()
+	err := t.source.Close()
+	t.finish()
+	return err
+}
+
+func (t *teeReadCloser) finish() {
+	t.done.Do(func() {
+		if t.onDone != nil {
+			t.onDone(t.tee)
+		}
+	})
 }
 
 // statusCapturingWriter wraps http.ResponseWriter to capture the status code

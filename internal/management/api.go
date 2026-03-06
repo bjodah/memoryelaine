@@ -1,7 +1,9 @@
 package management
 
 import (
+	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,7 +64,9 @@ func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			slog.Error("encoding logs response", "error", err)
+		}
 	}
 }
 
@@ -87,6 +91,61 @@ func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(entry)
+		if err := json.NewEncoder(w).Encode(entry); err != nil {
+			slog.Error("encoding log entry response", "id", id, "error", err)
+		}
+	}
+}
+
+func lastRequestHandler(reader *database.LogReader, writer *database.LogWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if body, ok := writer.LastRequest(); ok {
+			writeTextBody(w, body)
+			return
+		}
+
+		entry, err := reader.GetLatest()
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "no request captured yet", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "query error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeTextBody(w, entry.ReqBody)
+	}
+}
+
+func lastResponseHandler(reader *database.LogReader, writer *database.LogWriter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if body, ok := writer.LastResponse(); ok {
+			writeTextBody(w, body)
+			return
+		}
+
+		entry, err := reader.GetLatest()
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.Error(w, "no response captured yet", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "query error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		body := ""
+		if entry.RespBody != nil {
+			body = *entry.RespBody
+		}
+		writeTextBody(w, body)
+	}
+}
+
+func writeTextBody(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if _, err := w.Write([]byte(body)); err != nil {
+		slog.Error("writing plain-text response", "error", err)
 	}
 }

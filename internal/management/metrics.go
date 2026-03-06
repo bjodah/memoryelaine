@@ -11,7 +11,7 @@ import (
 type Metrics struct {
 	RequestsTotal   *prometheus.CounterVec
 	RequestDuration *prometheus.HistogramVec
-	ActiveStreams    prometheus.Gauge
+	ActiveStreams   prometheus.Gauge
 	DroppedLogs     prometheus.Counter
 	DBWriteErrors   prometheus.Counter
 }

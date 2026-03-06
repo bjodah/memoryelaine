@@ -28,6 +28,8 @@ func NewMux(deps ServerDeps) http.Handler {
 	mux.Handle("/metrics", basicAuth(metricsHandler(), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/api/logs", basicAuth(apiLogsHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/api/logs/", basicAuth(apiLogByIDHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
+	mux.Handle("/last-request", basicAuth(lastRequestHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))
+	mux.Handle("/last-response", basicAuth(lastResponseHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))
 
 	// Embedded web UI
 	sub, err := fs.Sub(web.StaticFS, "static")

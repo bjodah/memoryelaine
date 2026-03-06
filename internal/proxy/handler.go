@@ -13,10 +13,11 @@ const holderKey contextKey = "capture"
 // captureHolder is stored in the request context to pass capture state
 // between the handler, the Director, and ModifyResponse.
 type captureHolder struct {
-	reqTee      *teeReadCloser
-	respTee     *teeReadCloser
-	startTime   time.Time
-	upstreamErr *string
+	reqTee          *teeReadCloser
+	respTee         *teeReadCloser
+	startTime       time.Time
+	upstreamErr     *string
+	onResponseReady func(*cappedBuffer)
 }
 
 func setHolder(r *http.Request, h *captureHolder) *http.Request {
