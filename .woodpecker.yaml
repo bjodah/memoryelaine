@@ -9,7 +9,7 @@ steps:
   - name: restore-cache
     image: *ci_image
     commands:
-      - curl ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/cache-ci.tar | tar x
+      - curl ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/cache-ci.tar | tar x || true
     secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
     when:
      - event: push
