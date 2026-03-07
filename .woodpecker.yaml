@@ -19,7 +19,7 @@ steps:
     image: *ci_image
     commands:
       - bash -lc "./scripts/build-and-test.sh"
-      - bash -lc "curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1"
+      - bash -lc 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1'
       - bash -lc "./scripts/run-lint-checks.sh"
 
   - name: rebuild-cache
