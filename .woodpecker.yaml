@@ -1,0 +1,33 @@
+variables:
+  - &ci_image 'cont-reg.bjodah.se:443/bjodah/triceratops-5:25'
+
+when:
+  - event: [push]
+
+steps:
+
+  - name: restore-cache
+    image: *ci_image
+    commands:
+      - curl ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/cache-ci.tar | tar x || true
+    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
+    when:
+     - event: push
+       repo: bjodah/memoryelaine
+
+  - name: run-test-suite
+    image: *ci_image
+    commands:
+      - bash -lc "./scripts/build-and-test.sh"
+      - bash -lc 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1'
+      - bash -lc "./scripts/run-lint-checks.sh"
+      - find $(bash -lc 'go env GOMODCACHE') -type f -mtime +90 -exec rm {} \;
+      - tar -C / cf cache-ci.tar $(bash -lc 'go env GOMODCACHE')
+      - curl -T cache-ci.tar ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/
+    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
+    when:
+     - event: push
+       repo: bjodah/memoryelaine
+    depends_on:
+      - run-test-suite
+

@@ -144,46 +144,67 @@ The proxy will use Go's standard library `log/slog` to output structured JSON lo
 Based on this specification, and an addendum specified below, a plan for implementing the software has been authored in the sibling file `01-IMPLEMENTATION_PLAN.md`. That plan is ready for implementation. Every file, every function signature, every data structure, and the technique for each non-trivial piece is specified. The phases are ordered so each produces a testable artifact, and the critical streaming capture design (using `teeReadCloser` on both request and response bodies, flowing naturally through the reverse proxy) is explicitly called out with its rationale.
 
 <addendum incorporated_in="01-IMPLEMENTATION_PLAN.md">
-## Addendum: Ambiguities & Open Questions
+## Addendum: Ambiguities & Resolved Decisions
 
 ### 1. Streaming Body Capture Mechanics (Critical)
 
-The PRD says we tee request/response streams into a `bytes.Buffer` with an 8 MiB cap. But the **request body** and **response body** have very different lifecities:
+The PRD says we tee request/response streams into a `bytes.Buffer` with an 8 MiB cap. But the **request body** and **response body** have very different lifecycles:
 
-- **Request body**: Available as `r.Body` before proxying. We can read it fully (up to cap), buffer it, then replay it via `io.NopCloser` to the upstream. This is straightforward.
-- **Response body**: With `httputil.ReverseProxy`, we don't directly control the response body stream in the same way. The standard approach is a custom `http.ResponseWriter` that wraps `Write()` to tee bytes into a buffer. But we also need to track `resp_bytes` (the **total** bytes, even beyond the cap). So the `Write()` wrapper must always count but conditionally stop copying.
+- **Request body**: Available as `r.Body` before proxying. We use a streaming `teeReadCloser` that captures bytes as the upstream transport reads through it. **Decision: stream-only tee capture** — zero added latency; if the upstream fails before reading the body (e.g., dial error), the log may contain a partial or empty request body. This is acceptable for a zero-latency proxy.
+- **Response body**: Use `ModifyResponse` to wrap the `Body` with a `teeReadCloser` that captures up to the limit and counts all bytes. This is cleaner than wrapping the ResponseWriter for body capture (we still wrap ResponseWriter for status code capture and Flusher delegation).
 
-**Decision I'll encode in the plan:** Use `ModifyResponse` to wrap the `Body` with a `teeReadCloser` that captures up to the limit and counts all bytes. This is cleaner than wrapping the ResponseWriter for body capture (we still wrap ResponseWriter for status code capture and Flusher delegation).
+### 2. `req_bytes` / `resp_bytes` — Body Byte Count Only
 
-### 2. `req_bytes` / `resp_bytes` — Does This Include Only Body, or Headers Too?
-
-The schema has `req_body` and `req_bytes` as separate columns. The natural reading is that `req_bytes` is the **body byte count** (not including headers). I'll go with that interpretation.
+The schema has `req_body` and `req_bytes` as separate columns. `req_bytes` / `resp_bytes` is the **body byte count** (not including headers).
 
 ### 3. `ts_end` and `duration_ms` on Errored Requests
 
-If the upstream is unreachable (dial error), we still create a log entry. `ts_end` = time of error, `status_code` = `NULL` (or 502?), `error` = the error string. The PRD doesn't specify what status code the proxy itself returns to the client on upstream failure. I'll assume standard reverse proxy behavior: 502 Bad Gateway.
+If the upstream is unreachable (dial error), we still create a log entry. `ts_end` = time of error, `status_code` = `NULL` (or 502?), `error` = the error string. The proxy returns standard 502 Bad Gateway to the client on upstream failure.
 
 ### 4. Web UI Scope
 
-The PRD says "HTML/JS table of logs, embedded via `go:embed`". I'll treat this as a single-page app with a simple paginated table, filter by status/path, and a detail view. No frameworks — vanilla HTML/JS/CSS. This keeps scope contained.
+The PRD says "HTML/JS table of logs, embedded via `go:embed`". This is a single-page app with a simple paginated table, filter by status/path, and a detail view. No frameworks — vanilla HTML/JS/CSS. This keeps scope contained.
 
 ### 5. TUI Scope
 
-The PRD mentions `charmbracelet/bubbletea` but doesn't detail the interaction model. I'll define it as: a filterable, scrollable table with a detail pane (split view). Filters: status code, path, time range, full-text search on bodies.
+The PRD mentions `charmbracelet/bubbletea` but doesn't detail the interaction model. This is a filterable, scrollable table with a detail pane (split view). Filters: status code, path, time range, full-text search on bodies.
 
-### 6. `timeout_minutes: 23` — This Is the Upstream Timeout?
+### 6. `timeout_minutes` — Dial/TLS Timeouts Only, No Stream Deadline
 
-This is presumably the `http.Transport` / dialer timeout for the upstream connection. 23 minutes is long but reasonable for long-running LLM inference. I'll apply it as the full round-trip timeout on the outbound HTTP client (not a per-chunk idle timeout). The PRD doesn't mention an idle/read timeout — I'll add a note that this could be refined.
+**Decision: no timeout for active streams.** `timeout_minutes` is applied only as a dial/TLS/connection establishment timeout (via `net.Dialer.Timeout` and `http.Transport.TLSHandshakeTimeout`). Once a stream is active, there is no total-request deadline that would terminate a long-running SSE response. `ResponseHeaderTimeout` is set to `timeout_minutes` to bound the wait for the first response byte, but once headers arrive, the stream runs indefinitely.
 
 ### 7. Config File Discovery
 
-The PRD says "exclusively driven by `config.yaml`" but doesn't specify lookup order. I'll use: `--config` flag → `./config.yaml` → `$HOME/.config/memoryelaine/config.yaml`.
+Lookup order: `--config` flag → `./config.yaml` → `$HOME/.config/memoryelaine/config.yaml`.
 
-### 8. Channel-Full Drop: Should We Count Drops?
+### 8. Channel-Full Drop: Counted via Atomic Counter
 
-The `/health` endpoint shows `dropped_logs`. This means we need an atomic counter incremented on channel-full drops. Simple, but needs to be in the plan.
+The `/health` endpoint shows `dropped_logs`. An `atomic.Int64` counter in `LogWriter` is incremented on channel-full drops.
 
-### 9. Prune Command — Soft or Hard Delete?
+### 9. Prune Command — Hard Delete
 
-The PRD says "delete database records older than N days." I'll use hard `DELETE` + `VACUUM` (optionally, since VACUUM rewrites the entire DB and can be slow; I'll make it a flag `--vacuum`).
+Hard `DELETE` + optional `VACUUM` (flag `--vacuum`; warns that it may be slow on large DBs).
+
+### 10. Zero-Latency Streaming: Explicit FlushInterval
+
+**Decision:** `httputil.ReverseProxy.FlushInterval` must be set to `-1` (immediate flush) to ensure SSE chunks are forwarded to the client without buffering. The `statusCapturingWriter` must implement `http.Flusher` and delegate to the underlying writer's `Flush()`.
+
+### 11. Non-Log-Path Bypass: Two Proxy Instances
+
+**Decision:** Instantiate **two** `httputil.ReverseProxy` instances:
+- `rpPlain`: no `ModifyResponse` or capture hooks; used for non-log paths.
+- `rpCapture`: with `ModifyResponse` tee + request body tee; used for log paths.
+The handler dispatches based on the exact-match allowlist.
+
+### 12. Client IP: Direct Peer Only
+
+**Decision:** `client_ip` is derived from `r.RemoteAddr` (parsed to extract the host/IP portion). `X-Forwarded-For` and `X-Real-IP` headers are ignored.
+
+### 13. Log Path Matching: Exact Match
+
+**Decision:** `log_paths` entries are exact, canonical path strings. Matching uses a `map[string]struct{}` lookup. No prefix, glob, or regex matching.
+
+### 14. Header Redaction: Both Request and Response
+
+**Decision:** The `Authorization`, `Cookie`, and `Set-Cookie` headers are stripped from **both** request headers and response headers before serializing to JSON for the database.
 </addendum>
