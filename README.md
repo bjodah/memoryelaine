@@ -27,6 +27,8 @@ Start both HTTP servers:
 - **Proxy listener**: forwards client traffic to the configured upstream. Requests matching `proxy.log_paths` are captured.
 - **Management listener**: Web UI, JSON API, Prometheus metrics, health.
 
+The management surface also exposes a runtime recording switch. When recording is paused, matching proxy paths are still forwarded normally, but no new request/response bodies are captured to SQLite.
+
 ### `log`
 Query stored logs from the command line.
 
@@ -142,10 +144,12 @@ Structured log verbosity for the service process. Accepted values: `debug`, `inf
 - `GET /` - Embedded Web UI (Basic Auth protected)
 - `GET /api/logs` - JSON list API (Basic Auth protected)
 - `GET /api/logs/{id}` - JSON detail API with stream-view metadata (Basic Auth protected)
+- `GET /api/recording` - Current runtime recording state (Basic Auth protected)
+- `PUT /api/recording` - Change runtime recording state with `{"recording":true|false}` (Basic Auth protected)
 - `GET /last-request` - Latest captured request body (Basic Auth protected)
 - `GET /last-response` - Latest captured response body (Basic Auth protected)
 - `GET /metrics` - Prometheus metrics (Basic Auth protected)
-- `GET /health` - Public health JSON, no auth required
+- `GET /health` - Public health JSON, no auth required. Includes the current `recording` state.
 
 ### Query Parameters
 
@@ -157,6 +161,8 @@ Structured log verbosity for the service process. Accepted values: `debug`, `inf
 - `since`: unix timestamp in milliseconds
 - `until`: unix timestamp in milliseconds
 - `q`: substring search across request/response bodies
+
+When one or more loggable requests have been proxied while recording is paused, `/last-request` and `/last-response` keep serving the last captured bodies but label them as stale until a newly captured body replaces them.
 
 ## Stream View Mode
 

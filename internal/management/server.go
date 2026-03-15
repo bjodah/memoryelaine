@@ -7,14 +7,16 @@ import (
 
 	"memoryelaine/internal/config"
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 	"memoryelaine/internal/web"
 )
 
 // ServerDeps holds runtime dependencies for the management server.
 type ServerDeps struct {
-	Reader    *database.LogReader
-	LogWriter *database.LogWriter
-	Auth      config.AuthConfig
+	Reader         *database.LogReader
+	LogWriter      *database.LogWriter
+	RecordingState *recording.State
+	Auth           config.AuthConfig
 }
 
 // NewMux builds the http.ServeMux for the management port.
@@ -22,12 +24,13 @@ func NewMux(deps ServerDeps) http.Handler {
 	mux := http.NewServeMux()
 
 	// /health is public
-	mux.Handle("/health", healthHandler(deps.Reader, deps.LogWriter))
+	mux.Handle("/health", healthHandler(deps.Reader, deps.LogWriter, deps.RecordingState))
 
 	// Everything else requires basic auth
 	mux.Handle("/metrics", basicAuth(metricsHandler(), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/api/logs", basicAuth(apiLogsHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/api/logs/", basicAuth(apiLogByIDHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
+	mux.Handle("/api/recording", basicAuth(apiRecordingHandler(deps.RecordingState), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/last-request", basicAuth(lastRequestHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/last-response", basicAuth(lastResponseHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))
 

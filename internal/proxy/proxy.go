@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 )
 
 // NewReverseProxy creates a configured httputil.ReverseProxy for capture paths.
@@ -88,10 +89,16 @@ func Handler(
 	logPathSet map[string]struct{},
 	maxCapture int,
 	logWriter *database.LogWriter,
+	recordingState *recording.State,
 	upstream *url.URL,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, shouldLog := logPathSet[r.URL.Path]; !shouldLog {
+			rpPlain.ServeHTTP(w, r)
+			return
+		}
+		if !recordingState.Enabled() {
+			logWriter.MarkLastBodiesStale()
 			rpPlain.ServeHTTP(w, r)
 			return
 		}

@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 )
 
-func healthHandler(reader *database.LogReader, writer *database.LogWriter) http.HandlerFunc {
+func healthHandler(reader *database.LogReader, writer *database.LogWriter, recordingState *recording.State) http.HandlerFunc {
 	startTime := time.Now()
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
@@ -25,6 +26,7 @@ func healthHandler(reader *database.LogReader, writer *database.LogWriter) http.
 			"status":         "ok",
 			"db_connected":   dbConnected,
 			"dropped_logs":   writer.DroppedCount(),
+			"recording":      recordingState.Enabled(),
 			"uptime_seconds": int(time.Since(startTime).Seconds()),
 		}
 

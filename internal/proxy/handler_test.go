@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 	"path/filepath"
 )
 
@@ -47,7 +48,7 @@ func setupProxyTest(t *testing.T, upstreamHandler http.HandlerFunc) (
 	go lw.Run(ctx)
 
 	logPaths := map[string]struct{}{"/v1/chat/completions": {}}
-	h := Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, upstreamURL)
+	h := Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, recording.NewState(true), upstreamURL)
 
 	cleanup := func() {
 		cancel()
@@ -165,7 +166,7 @@ func TestHandler_Truncation(t *testing.T) {
 	go lw.Run(ctx)
 
 	logPaths := map[string]struct{}{"/test": {}}
-	h := Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, upstreamURL)
+	h := Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, recording.NewState(true), upstreamURL)
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	rec := httptest.NewRecorder()
@@ -204,6 +205,81 @@ func TestHandler_Truncation(t *testing.T) {
 	}
 	if e.RespBody != nil && len(*e.RespBody) != maxCapture {
 		t.Errorf("expected resp_body length = %d, got %d", maxCapture, len(*e.RespBody))
+	}
+}
+
+func TestHandler_RecordingPaused_Bypasses(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		mustWrite(t, w, []byte("paused"))
+	}))
+	defer upstream.Close()
+
+	upstreamURL, _ := url.Parse(upstream.URL)
+	maxCapture := 1024
+
+	rpPlain := NewPlainReverseProxy(upstreamURL, 5*time.Second)
+	rpCapture := NewReverseProxy(upstreamURL, 5*time.Second, maxCapture)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := database.OpenWriter(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, db)
+	lw, err := database.NewLogWriter(db, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, lw)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go lw.Run(ctx)
+	defer func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	}()
+
+	logPaths := map[string]struct{}{"/v1/chat/completions": {}}
+	h := Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, recording.NewState(false), upstreamURL)
+
+	lw.SetLastRequest(`{"prompt":"old"}`)
+	lw.SetLastResponse(`{"answer":"old"}`)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"prompt":"new"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "paused" {
+		t.Fatalf("expected upstream body, got %q", rec.Body.String())
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	rdb, err := database.OpenReader(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, rdb)
+	reader := database.NewLogReader(rdb)
+	entries, err := reader.Query(database.DefaultQueryFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no log entries while paused, got %d", len(entries))
+	}
+
+	if _, _, stale := lw.LastRequest(); !stale {
+		t.Fatal("expected last request to be marked stale")
+	}
+	if _, _, stale := lw.LastResponse(); !stale {
+		t.Fatal("expected last response to be marked stale")
 	}
 }
 

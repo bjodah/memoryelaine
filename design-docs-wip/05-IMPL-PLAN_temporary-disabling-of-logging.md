@@ -1,84 +1,128 @@
 # Implementation Plan for Temporarily Disabling Logging
 
-I would like to add the functionality to temporarily disable logging. So we need to track a recording state. I want to be able to probe its value via the management endpoint, is it conventional to include it in e.g. /health? or a dedicated enpoint. I would also like to be able to set it "on"/"off" via an API call or via TUI, or via Web-UI. I also want to recording state to be clearly visible in both the TUI and Web-UI.
+Add a runtime recording state so request/response capture can be paused without
+restarting `memoryelaine serve`.
 
-## 0. General insights
+The revised scope is:
 
-To safely toggle logging without restarting the proxy, we need an `atomic.Bool` state shared between the Proxy handler and the Management API.
+- update the main spec in `design-docs-main/`
+- expose recording state publicly via `/health`
+- add an authenticated management endpoint to read and change recording state
+- make recording state visible and toggleable in the Web UI
+- keep the TUI a pure log-viewing utility with no runtime-control features
 
-**Crucial Architecture Insight:** The `memoryelaine tui` is executed as a separate CLI process. It reads directly from SQLite. Because the memory state (recording on/off) lives inside the `memoryelaine serve` process, the TUI *must* use an HTTP client to talk to the management API to fetch and toggle the state.
+## 0. Semantics to Document
 
-Here is the detailed, file-by-file implementation plan.
+The feature needs explicit specification, not just code changes.
 
-## 1. Core State & Command Wiring
+- `recording=true` means loggable paths are captured and written as usual.
+- `recording=false` means loggable paths are still proxied, but request/response
+  capture to SQLite is bypassed entirely.
+- The recording decision is taken at request start.
+- If a request begins while recording is enabled, it is fully logged even if
+  recording is disabled while that request is still in flight.
+- `/health` will expose `"recording": true|false` publicly.
+- `/last-request` and `/last-response` continue returning the last captured
+  bodies, but must be labeled stale once at least one loggable request has been
+  proxied while recording is disabled.
+
+## 1. Spec Update
+**Files:** `design-docs-main/04-SPEC-version2.md`, `README.md`
+
+*   **What to change:**
+    *   Extend the logging/runtime semantics to define the recording state and
+        its request-start boundary.
+    *   Add `GET/PUT /api/recording` to the management API.
+    *   Extend `/health` response shape with `recording`.
+    *   Clarify stale behavior for `/last-request` and `/last-response`.
+    *   Update Web UI behavior to include recording-state visibility and toggle.
+    *   Keep TUI behavior unchanged apart from remaining a read-only viewer.
+*   **Why:** The main spec currently defines the management surface and viewer
+    behavior tightly; this feature is a real spec change.
+
+## 2. Core State & Command Wiring
 **File:** `cmd/serve.go`
-*   **What to change:**
-    *   Create `recordingState := &atomic.Bool{}` and initialize it to `true`.
-    *   Pass `recordingState` into `proxy.Handler`.
-    *   Pass `recordingState` into `management.NewMux` via `management.ServerDeps`.
-*   **Why:** This establishes a thread-safe source of truth in memory for the proxy server.
 
-## 2. Proxy Bypass Logic
+*   **What to change:**
+    *   Create a shared runtime recording controller/state object initialized to
+        `true`.
+    *   Pass it into `proxy.Handler`.
+    *   Pass it into `management.NewMux` via `management.ServerDeps`.
+*   **Why:** This establishes a thread-safe source of truth in memory for the
+    serve process.
+
+## 3. Proxy Bypass Logic
 **File:** `internal/proxy/proxy.go`
-*   **What to change:**
-    *   Update the `Handler` signature to accept `recordingState *atomic.Bool`.
-    *   In the returned `http.HandlerFunc`, immediately after checking `logPathSet`, add:
-        ```go
-        if !recordingState.Load() {
-            rpPlain.ServeHTTP(w, r)
-            return
-        }
-        ```
-*   **Why:** If recording is paused, we want zero overhead. Falling back to `rpPlain` achieves this perfectly, functioning exactly like an un-logged path.
 
-## 3. Management API Endpoints
-**Files:** `internal/management/server.go`, `internal/management/api.go`, `internal/management/health.go`
 *   **What to change:**
-    *   **`server.go`**: Add `RecordingState *atomic.Bool` to `ServerDeps`. Register a new endpoint: `mux.Handle("/api/recording", basicAuth(apiRecordingHandler(deps.RecordingState), deps.Auth.Username, deps.Auth.Password))`.
-    *   **`health.go`**: Add `"recording": deps.RecordingState.Load()` to the JSON response map. (This satisfies the requirement to probe it via `/health`).
-    *   **`api.go`**: Create `apiRecordingHandler`. It handles two methods:
-        *   `GET`: Returns `{"recording": true|false}`.
-        *   `PUT` (or `POST`): Decodes a JSON body `{"recording": bool}`, updates `state.Store(value)`, and returns the new state.
-*   **Why:** Allows external systems (and our Web UI / TUI) to read and manipulate the state.
+    *   Update `Handler` to accept the shared runtime recording controller.
+    *   For loggable paths, check the recording state before capture wiring is
+        set up.
+    *   If recording is disabled, mark the last-body state as stale for that
+        loggable request and forward through `rpPlain`.
+*   **Why:** This preserves normal proxy behavior while removing capture
+    overhead during pause.
 
-## 4. Web UI Updates
-**Files:** `internal/web/static/index.html`, `internal/web/static/style.css`, `internal/web/static/app.js`
+## 4. Management API Endpoints
+**Files:** `internal/management/server.go`, `internal/management/api.go`,
+`internal/management/health.go`
+
 *   **What to change:**
-    *   **`index.html`**: Add a button in the `.controls` div: `<button id="recording-toggle-btn">🔴 REC</button>`.
-    *   **`style.css`**: Add styles to make the button look distinct when paused (e.g., greyed out with `⏸ PAUSED` text).
-    *   **`app.js`**:
-        *   Add a function `fetchRecordingState()` that GETs `/health` (or `/api/recording`), updates a local JS variable, and updates the button text/color.
-        *   Add a click listener to the button that sends a `PUT /api/recording` with the inverted state, then re-fetches.
-        *   Call `fetchRecordingState()` on initial load and piggyback it onto the `autoRefreshTimer` if active.
-*   **Why:** Provides the required visual indicator and toggle mechanism in the Web UI.
+    *   Add the runtime recording controller to `ServerDeps`.
+    *   Register a new authenticated endpoint:
+        `mux.Handle("/api/recording", basicAuth(apiRecordingHandler(...)))`.
+    *   Add `"recording": ...` to `/health`.
+    *   Implement `apiRecordingHandler`:
+        *   `GET` returns `{"recording": true|false}`
+        *   `PUT` accepts `{"recording": bool}`, updates state, and returns the
+            new state
+    *   Update `/last-request` and `/last-response` to label stale results when
+        the runtime state says the last captured bodies have become stale.
+*   **Why:** The management API is the correct runtime-control surface.
 
-## 5. TUI Updates
-**Files:** `cmd/tui.go`, `internal/tui/app.go`, `internal/tui/model.go`
+## 5. Web UI Updates
+**Files:** `internal/web/static/index.html`, `internal/web/static/style.css`,
+`internal/web/static/app.js`
+
 *   **What to change:**
-    *   **`cmd/tui.go` & `app.go`**: The TUI needs to make HTTP calls. Pass `cfg.Management` into `tui.Run()`.
-    *   **`model.go`**:
-        *   Add `management config.ManagementConfig` and `isRecording bool` to `Model`.
-        *   Create two new `tea.Cmd`s: `checkRecordingCmd` (GET `/api/recording` via `http.Client` using Basic Auth) and `toggleRecordingCmd` (PUT `/api/recording`).
-        *   Add new message types: `recordingStateMsg(bool)`.
-        *   On `Init()`, return `tea.Batch(m.loadLogs, m.checkRecordingCmd)`.
-        *   In `handleKey`, add a binding for `"p"` (Pause/Play). When pressed, return `m.toggleRecordingCmd`.
-        *   In `tableView()` and `detailView()`, append `[🔴 REC]` or `[⏸ PAUSED]` to the `title` variable at the top of the screen.
-*   **Why:** The TUI is a separate process. It must use HTTP to mutate the active server's state.
+    *   Add a recording-state indicator/button in the main controls area.
+    *   Fetch recording state from `/health` for display.
+    *   Toggle recording state via authenticated `PUT /api/recording`.
+    *   Refresh the visible recording indicator on initial load and during
+        auto-refresh.
+*   **Why:** The Web UI is part of the management surface and should make the
+    active state obvious.
 
-## 6. Required Tests
+## 6. TUI Non-Changes
+
+The TUI remains read-only for this feature.
+
+- no HTTP client wiring in `memoryelaine tui`
+- no new runtime-control keybindings
+- no recording-state indicator requirement in the TUI
+
+## 7. Required Tests
 
 **Proxy Tests (`internal/proxy/handler_test.go`)**
+
 *   **Add `TestHandler_RecordingPaused_Bypasses`**:
     *   Set up the proxy test environment.
-    *   Pass an `atomic.Bool` set to `false`.
-    *   Send a request to a loggable path (e.g., `/v1/chat/completions`).
-    *   Assert that `rec.Code == 200` but `lw.DroppedCount() == 0` (and `lw.queue` is empty if checked via sleep), proving it used `rpPlain`.
+    *   Pass recording state initialized to `false`.
+    *   Send a request to a loggable path.
+    *   Assert proxying still succeeds.
+    *   Assert no SQLite log entry is written.
+    *   Assert last-body stale state is marked after that paused request.
 
 **Management Tests (`internal/management/server_test.go`)**
+
 *   **Add `TestAPIRecording_GetAndPut`**:
-    *   Initialize `ServerDeps` with `RecordingState` set to `true`.
-    *   Perform a `GET /api/recording` (with auth) and assert it returns `{"recording": true}`.
-    *   Perform a `PUT /api/recording` with body `{"recording": false}`.
-    *   Assert the response is `200 OK`.
-    *   Assert `RecordingState.Load() == false` internally.
-    *   Check `GET /health` to ensure `"recording": false` appears there too.
+    *   Initialize `ServerDeps` with recording enabled.
+    *   Assert `GET /api/recording` returns `true`.
+    *   `PUT` `{"recording":false}` and assert the shared state changed.
+    *   Assert `GET /health` includes `"recording": false`.
+
+*   **Add stale last-body tests**:
+    *   Seed `last-request` / `last-response`.
+    *   Mark stale after a paused loggable request.
+    *   Assert `/last-request` and `/last-response` clearly label the values as
+        stale.

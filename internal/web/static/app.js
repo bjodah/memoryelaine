@@ -12,9 +12,12 @@
     const searchFilter = document.getElementById('search-filter');
     const refreshBtn = document.getElementById('refresh-btn');
     const autoRefresh = document.getElementById('auto-refresh');
+    const recordingToggleBtn = document.getElementById('recording-toggle-btn');
     const detailOverlay = document.getElementById('detail-overlay');
     const detailContent = document.getElementById('detail-content');
     const closeDetail = document.getElementById('close-detail');
+    let recordingState = true;
+    let recordingBusy = false;
 
     function buildURL() {
         let url = `/api/logs?limit=${LIMIT}&offset=${offset}`;
@@ -46,6 +49,47 @@
             renderTable(json.data || [], json.total || 0);
         } catch (e) {
             tbody.innerHTML = `<tr><td colspan="8">Error: ${e.message}</td></tr>`;
+        }
+    }
+
+    function renderRecordingState() {
+        recordingToggleBtn.disabled = recordingBusy;
+        recordingToggleBtn.classList.toggle('recording-on', recordingState);
+        recordingToggleBtn.classList.toggle('recording-off', !recordingState);
+        recordingToggleBtn.textContent = recordingState ? 'Recording: ON' : 'Recording: PAUSED';
+    }
+
+    async function fetchRecordingState() {
+        try {
+            const resp = await fetch('/health');
+            const json = await resp.json();
+            recordingState = !!json.recording;
+            renderRecordingState();
+        } catch (e) {
+            recordingToggleBtn.textContent = 'Recording: unavailable';
+        }
+    }
+
+    async function toggleRecordingState() {
+        recordingBusy = true;
+        renderRecordingState();
+        try {
+            const resp = await fetch('/api/recording', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recording: !recordingState })
+            });
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}`);
+            }
+            const json = await resp.json();
+            recordingState = !!json.recording;
+            renderRecordingState();
+        } catch (e) {
+            alert('Failed to toggle recording: ' + e.message);
+        } finally {
+            recordingBusy = false;
+            renderRecordingState();
         }
     }
 
@@ -190,11 +234,17 @@
 
     autoRefresh.addEventListener('change', () => {
         if (autoRefresh.checked) {
-            autoRefreshTimer = setInterval(loadLogs, 5000);
+            autoRefreshTimer = setInterval(() => {
+                loadLogs();
+                fetchRecordingState();
+            }, 5000);
         } else {
             clearInterval(autoRefreshTimer);
         }
     });
+    recordingToggleBtn.addEventListener('click', toggleRecordingState);
 
     loadLogs();
+    renderRecordingState();
+    fetchRecordingState();
 })();
