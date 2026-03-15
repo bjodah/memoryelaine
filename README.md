@@ -1,142 +1,81 @@
 # memoryelaine
 
-memoryelaine is a single-binary Go proxy for OpenAI-compatible inference APIs.
-It forwards traffic to one fixed upstream, captures selected request/response pairs,
-and writes those logs asynchronously into SQLite so the proxy stays responsive.
+memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible inference APIs. It sits transparently between clients and one fixed upstream provider. Its primary purpose is to proxy requests with no intentional buffering of active streams while asynchronously logging selected request/response pairs, timings, and HTTP metadata to a local SQLite database.
 
-## Core commands
+## Quick Start
 
-  memoryelaine serve
-      Start both HTTP servers:
-        - proxy listener: forwards client traffic to the configured upstream
-        - management listener: Web UI, JSON API, Prometheus metrics, health
+```bash
+# Copy the example config
+cp example-config.yaml config.yaml
 
-  memoryelaine log [flags]
-      Query stored logs from the command line.
+# Build and test
+./scripts/build-and-test.sh
 
-  memoryelaine tui
-      Open the interactive terminal UI for browsing logs.
-
-  memoryelaine prune --keep-days N [--dry-run] [--vacuum]
-      Delete records older than N days.
-
-## Global flags
-```
-  --config PATH
-      Path to a YAML config file.
-      Lookup order when omitted:
-        1. ./config.yaml
-        2. $HOME/.config/memoryelaine/config.yaml
-        3. built-in defaults
+# Run the proxy
+go run . serve --config ./config.yaml
 ```
 
-## command: `serve`
+Once the proxy is running:
+- Send client traffic to `proxy.listen_addr`
+- Browse the management UI on `management.listen_addr`
+- Inspect logs with `memoryelaine log` or `memoryelaine tui`
 
-The serve command has no command-specific flags today; it is driven by config.
-When running, it starts:
+## Core Commands
 
-```
-  Proxy port
-    - Handles upstream proxying only.
-    - Requests whose path exactly matches proxy.log_paths are captured and logged.
-    - All other paths are proxied without database logging.
+### `serve`
+Start both HTTP servers:
+- **Proxy listener**: forwards client traffic to the configured upstream. Requests matching `proxy.log_paths` are captured.
+- **Management listener**: Web UI, JSON API, Prometheus metrics, health.
 
-  Management port
-    - GET /           : embedded Web UI (Basic Auth protected)
-    - GET /api/logs   : JSON list API (Basic Auth protected)
-    - GET /api/logs/{id}
-                      : JSON detail API with stream-view metadata (Basic Auth protected)
-    - GET /last-request
-                      : latest captured request body (Basic Auth protected)
-    - GET /last-response
-                      : latest captured response body (Basic Auth protected)
-    - GET /metrics    : Prometheus metrics (Basic Auth protected)
-    - GET /health     : public health JSON, no auth required
-```
+### `log`
+Query stored logs from the command line.
 
-Implementation notes worth knowing:
-- request/response capture is capped by logging.max_capture_bytes
-- over-limit bodies keep streaming to the client but logs are marked truncated
-- Authorization, Cookie, and Set-Cookie are redacted before DB storage
-- SQLite runs in WAL mode for concurrent serve/log/tui/prune access
-- active streams flush immediately; the proxy does not buffer SSE responses
-- `/last-request` and `/last-response` can be briefly out of sync during an
-  in-flight exchange; that is expected
-
-## command: `log`
-
-```
+**Usage:**
+```bash
   -f, --format json|jsonl|table   Output format (default: json)
   -n, --limit INT                 Number of records to return (default: 20)
       --offset INT                Pagination offset (default: 0)
-      --status INT                Exact HTTP status filter, for example 200 or 500
+      --status INT                Exact HTTP status filter, e.g., 200 or 500
       --path STRING               Exact request path filter
-      --since VALUE               RFC3339 timestamp or relative duration
+      --since VALUE               RFC3339 timestamp or relative duration (e.g., 30m, 2h, 7d)
       --until VALUE               RFC3339 timestamp or relative duration
   -q, --query STRING              Substring search across req_body and resp_body
       --id INT                    Return a single log record by primary key
 ```
 
-Relative time examples accepted by `--since`/`--until`: ` 30m   2h   7d   2.5h`
-
-Examples:
-```console
+**Examples:**
+```bash
 memoryelaine log -f table -n 10
 memoryelaine log --status 500 --since 24h
 memoryelaine log --path /v1/chat/completions -q tool_call
 memoryelaine log --id 42
 ```
 
-Table output columns: `ID, TIME, METHOD, PATH, STATUS, DURATION, REQ SIZE, RESP SIZE`
+### `tui`
+Open the interactive terminal UI for browsing logs.
 
-## command: `prune`
-```
-  --keep-days INT   Required. Delete rows older than this many days.
-  --dry-run         Print how many rows would be deleted, but do not delete.
-  --vacuum          Run SQLite VACUUM after deletion. Can be slow on large DBs.
-```
-Examples:
-```console
+**Keybindings:**
+- `j`/`k` or arrows: Navigate the table or scroll the detail view
+- `enter`: Open detail view for the selected row
+- `esc` or `q`: Leave detail view
+- `v`: Toggle stream view mode (Raw / Assembled)
+- `r`: Refresh current page
+- `n` / `p`: Next / previous page
+- `f`: Cycle exact status filters (none → 200 → 400 → 500)
+- `q` / `ctrl+c`: Quit
+
+### `prune`
+Delete records older than N days.
+
+**Examples:**
+```bash
 memoryelaine prune --keep-days 7 --dry-run
 memoryelaine prune --keep-days 30 --vacuum
 ```
 
-## tui
+## Configuration
 
-The terminal UI opens against the configured SQLite database and supports:
-
-```
-  - j/k or arrow keys: move through the table
-  - enter            : open detail view for the selected row
-  - esc or q         : leave detail view
-  - j/k              : scroll in detail view
-  - v                : toggle stream view mode (Raw / Assembled) in detail view
-  - r                : refresh current page
-  - n / p            : next / previous page
-  - f                : cycle exact status filters: none -> 200 -> 400 -> 500 -> none
-  - q / ctrl+c       : quit from the table view
-```
-
-### Stream view mode
-
-When viewing a streamed response in the detail view, the TUI and Web UI offer
-a **Stream View** toggle:
-
-- **Raw**: the exact stored response body, including SSE framing
-- **Assembled**: reconstructed assistant text derived from the SSE stream
-
-Assembled mode is currently supported for:
-
-- `/v1/chat/completions`
-- `/v1/completions`
-
-Assembled mode is unavailable for truncated, non-streamed, or unsupported
-responses. When parsing only partially succeeds, the recovered text is shown
-with a warning indicator.
-
-## Config file schema
-
-Example:
+Example config file (`config.yaml`):
 ```yaml
 proxy:
   listen_addr: "0.0.0.0:8000"
@@ -160,111 +99,87 @@ logging:
   level: "info"
 ```
 
-Accepted fields and what they do:
+Lookup order: `--config <path>` → `./config.yaml` → `$HOME/.config/memoryelaine/config.yaml` → Built-in defaults.
 
-```
-  proxy.listen_addr
-      Address for the proxy listener.
-      Default: 0.0.0.0:8000
+### Configuration Fields
 
-  proxy.upstream_base_url
-      Base URL for the single upstream provider.
-      Must be a valid http:// or https:// URL.
-      Default: https://api.openai.com
+#### `proxy.listen_addr`
+Address for the proxy listener. Default: `0.0.0.0:8000`
 
-  proxy.timeout_minutes
-      Connection setup / response-header timeout budget.
-      This does not terminate an already-active response stream.
-      Default: 23
+#### `proxy.upstream_base_url`
+Base URL for the single upstream provider. Must be a valid `http://` or `https://` URL. Default: `https://api.openai.com`
 
-  proxy.log_paths
-      Exact path allowlist for payload capture.
-      Requests on other paths are still proxied, just not written to SQLite.
-      Must not be empty.
-      Default:
-        - /v1/chat/completions
-        - /v1/completions
+#### `proxy.timeout_minutes`
+Connection setup / response-header timeout budget. This does not terminate an already-active response stream. Default: `23`
 
-  management.listen_addr
-      Address for the management server.
-      Must differ from proxy.listen_addr.
-      Default: 0.0.0.0:8080
+#### `proxy.log_paths`
+Exact path allowlist for payload capture. Requests on other paths are still proxied, just not written to SQLite. Default:
+- `/v1/chat/completions`
+- `/v1/completions`
 
-  management.auth.username
-      Basic Auth username for /, /api/logs, /api/logs/{id}, and /metrics.
-      Default: admin
+#### `management.listen_addr`
+Address for the management server. Must differ from proxy.listen_addr. Default: `0.0.0.0:8080`
 
-  management.auth.password
-      Basic Auth password for the management endpoints above.
-      Default: changeme
+#### `management.auth.username`
+Basic Auth username for `/`, `/api/logs`, `/api/logs/{id}`, and `/metrics`. Default: `admin`
 
-  database.path
-      Path to the SQLite database file.
-      Default: ./memoryelaine.db
+#### `management.auth.password`
+Basic Auth password for the management endpoints above. Default: `changeme`
 
-  logging.max_capture_bytes
-      Maximum number of request or response body bytes retained in memory and
-      persisted in the database per direction.
-      Bodies larger than this are truncated in the log entry while still being
-      fully streamed to the client.
-      Must be greater than zero.
-      Default: 8388608 (8 MiB)
+#### `database.path`
+Path to the SQLite database file. Default: `./memoryelaine.db`
 
-  logging.level
-      Structured log verbosity for the service process.
-      Accepted values: debug, info, warn, error.
-      Default: info
-```
+#### `logging.max_capture_bytes`
+Maximum number of request or response body bytes retained in memory and persisted in the database per direction. Bodies larger than this are truncated in the log entry while still being fully streamed to the client. Must be greater than zero. Default: `8388608` (8 MiB)
 
-## Management API query parameters
+#### `logging.level`
+Structured log verbosity for the service process. Accepted values: `debug`, `info`, `warn`, `error`. Default: `info`
 
-```
-  GET /api/logs accepts:
-    limit   integer, max 1000
-    offset  integer
-    status  exact status code
-    path    exact request path
-    since   unix timestamp in milliseconds
-    until   unix timestamp in milliseconds
-    q       substring search across request/response bodies
+## Management API
 
-  GET /last-request
-    returns the latest captured request body as plain text
+### Endpoints
 
-  GET /last-response
-    returns the latest captured response body as plain text
-```
+- `GET /` - Embedded Web UI (Basic Auth protected)
+- `GET /api/logs` - JSON list API (Basic Auth protected)
+- `GET /api/logs/{id}` - JSON detail API with stream-view metadata (Basic Auth protected)
+- `GET /last-request` - Latest captured request body (Basic Auth protected)
+- `GET /last-response` - Latest captured response body (Basic Auth protected)
+- `GET /metrics` - Prometheus metrics (Basic Auth protected)
+- `GET /health` - Public health JSON, no auth required
 
-## Helper scripts
+### Query Parameters
 
-```
-  ./scripts/build-and-test.sh
-      Runs go test ./... and go build ./...
+`GET /api/logs` accepts:
+- `limit`: integer, max 1000
+- `offset`: integer
+- `status`: exact status code
+- `path`: exact request path
+- `since`: unix timestamp in milliseconds
+- `until`: unix timestamp in milliseconds
+- `q`: substring search across request/response bodies
 
-  ./scripts/run-lint-checks.sh
-      Verifies formatting with gofmt and runs golangci-lint using the installed
-      binary at $(go env GOPATH)/bin/golangci-lint
+## Stream View Mode
+
+When viewing a streamed response in the detail view, the TUI and Web UI offer a **Stream View** toggle:
+
+- **Raw**: the exact stored response body, including SSE framing
+- **Assembled**: reconstructed assistant text derived from the SSE stream
+
+Assembled mode is currently supported for:
+- `/v1/chat/completions`
+- `/v1/completions`
+
+Assembled mode is unavailable for truncated, non-streamed, or unsupported responses. When parsing only partially succeeds, the recovered text is shown with a warning indicator.
+
+## Development
+
+### Helper Scripts
+
+```bash
+./scripts/build-and-test.sh
+./scripts/run-lint-checks.sh
 ```
 
-## Typical local workflow
+### Repository Layout
 
-```
-  cp example-config.yaml config.yaml
-  ./scripts/run-lint-checks.sh
-  ./scripts/build-and-test.sh
-  go run . serve --config ./config.yaml
-```
-
-Once the proxy is running:
-- send client traffic to proxy.listen_addr
-- browse the management UI on management.listen_addr
-- inspect logs with `memoryelaine log` or `memoryelaine tui`
-
-
-## Repository layout
-
-Specifications, implementation plans etc. are found under `design-docs-wip/`, `design-docs-main/`,
-and `design-docs-legacy/`. The `-wip` folder is "work in progress" (should typically be empty when
-we are on `main` branch), the `-main` folder should typically describe the state of the main-branch
-/ "what's released", the `-legacy` folder is typically of little interest and is to be considered a
-historical legacy and typically contains documents that are out-of-date.
+Specifications, implementation plans etc. are found under `design-docs-wip/`, `design-docs-main/`, and `design-docs-legacy/`. The `-wip` folder is "work in progress" (should typically be empty when we are on `main` branch), the `-main` folder should typically describe the state of the main-branch / "what's released", the `-legacy` folder is typically of little interest and is to be considered a historical legacy and typically contains documents that are out-of-date.
