@@ -53,7 +53,8 @@ The assembled mode should only be offered when all of the following are true:
 - the request path is one of the supported paths
 - the response appears to be streamed SSE data
 - the stored response body is not truncated
-- parsing succeeds
+- parsing succeeds, or parsing succeeds partially with enough recovered text to
+  show a clearly marked partial assembled view
 
 If any of these conditions are not met, the UI should fall back to `Raw` and
 should not pretend that an assembled view is available.
@@ -79,6 +80,19 @@ final completion string.
 
 The assembled view is best-effort. It is not a replacement for the raw log.
 
+If the stream is interrupted or the final event is malformed, but enough earlier
+events were parsed successfully, the viewer may show a partial assembled view
+with an explicit warning state such as `ReasonPartialParse`.
+
+The first version should not silently collapse unsupported structures into a
+misleading assembled string. In particular:
+
+- multi-choice streams should not silently display only choice `0`
+- tool-call-only streams should not display a blank assembled result as if
+  nothing happened
+
+These cases should surface explicit status metadata and fall back to `Raw`.
+
 ## Non-Goals
 
 - Do not replace raw storage with assembled storage.
@@ -93,11 +107,15 @@ The assembled view is best-effort. It is not a replacement for the raw log.
 - The parsing logic should live close to the viewer layer or in a shared helper
   used by both TUI and web UI.
 - The viewer should clearly indicate the active mode: `Raw` or `Assembled`.
-- If assembled parsing fails, the UI should surface that plainly and keep `Raw`
-  available.
+- If assembled parsing fails completely, the UI should surface that plainly and
+  keep `Raw` available.
+- If assembled parsing succeeds only partially, the UI should still present the
+  recovered text with an explicit warning state.
+- Assembled output should always be treated as plain text in the UI, not as
+  HTML or Markdown.
 - The API may eventually expose both raw and assembled representations, but the
-  first version can compute assembled output in-process inside each viewer if
-  that keeps the change smaller.
+  first version should avoid duplicating the raw response body when the client
+  already has access to it via the stored log entry.
 
 ## Acceptance Criteria
 
@@ -105,7 +123,9 @@ The assembled view is best-effort. It is not a replacement for the raw log.
    switch between `Raw` and `Assembled` views.
 2. A user inspecting a supported streamed `/v1/completions` response can switch
    between `Raw` and `Assembled` views.
-3. For truncated streamed responses, only `Raw` is shown.
-4. For unsupported or non-streamed responses, `Raw` remains the only view.
-5. Raw stored response data remains unchanged in the database schema and log
+3. For partially parsed streamed responses, the viewer can show recovered
+   assembled text with an explicit partial-warning state.
+4. For truncated streamed responses, only `Raw` is shown.
+5. For unsupported or non-streamed responses, `Raw` remains the only view.
+6. Raw stored response data remains unchanged in the database schema and log
    records.

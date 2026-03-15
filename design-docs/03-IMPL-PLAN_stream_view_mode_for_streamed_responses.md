@@ -63,7 +63,7 @@ Why:
 - `resp_truncated` is `false`
 - `resp_body` is present
 - the response looks like SSE
-- parsing succeeds without structural errors
+- parsing either succeeds fully or succeeds partially with recoverable text
 
 Why:
 
@@ -125,10 +125,13 @@ type AvailabilityReason string
 
 const (
     ReasonSupported          AvailabilityReason = "supported"
+    ReasonPartialParse       AvailabilityReason = "partial_parse"
     ReasonUnsupportedPath    AvailabilityReason = "unsupported_path"
+    ReasonUnsupportedMultiChoice AvailabilityReason = "unsupported_multi_choice"
+    ReasonUnsupportedToolCallStream AvailabilityReason = "unsupported_tool_call_stream"
     ReasonMissingBody        AvailabilityReason = "missing_body"
     ReasonTruncated          AvailabilityReason = "truncated"
-    ReasonNotSSE            AvailabilityReason = "not_sse"
+    ReasonNotSSE             AvailabilityReason = "not_sse"
     ReasonParseFailed        AvailabilityReason = "parse_failed"
 )
 
@@ -148,7 +151,8 @@ Responsibilities:
 - return raw body directly from `entry.RespBody`
 - determine whether the entry is eligible for assembly
 - dispatch to endpoint-specific assembly helpers
-- report why assembled mode is unavailable
+- report whether assembled mode is fully available, partially available, or
+  unavailable
 
 Why this structure:
 
@@ -162,7 +166,7 @@ Implement parsing for supported streamed OpenAI-compatible responses.
 
 Recommended responsibilities:
 
-- split SSE stream into events
+- split SSE stream into events, handling both LF and CRLF framing
 - ignore empty/comment lines where appropriate
 - process `data:` payload lines
 - stop cleanly on `[DONE]`
@@ -170,31 +174,40 @@ Recommended responsibilities:
 
 For `/v1/chat/completions`:
 
-- iterate over `choices[*].delta.content`
+- iterate over `choices[0].delta.content`
 - append text chunks in order
-- ignore fields that are not text content in v1
+- detect and reject multi-choice streams with
+  `ReasonUnsupportedMultiChoice`
+- detect tool-call / function-call deltas and reject with
+  `ReasonUnsupportedToolCallStream`
 
 For `/v1/completions`:
 
-- iterate over `choices[*].text`
+- iterate over `choices[0].text`
 - append chunks in order
+- detect and reject multi-choice streams with
+  `ReasonUnsupportedMultiChoice`
 
-Initial v1 simplification:
+Partial parse behavior:
 
-- support only single-choice assembly semantics well
-- if multiple choices are present, either:
-  - assemble only index `0`, or
-  - fail closed with `ReasonParseFailed`
+- if earlier SSE events parse successfully but a later event is malformed,
+  return the recovered text with `ReasonPartialParse`
+- partial parse is only valid when at least one supported text fragment was
+  recovered before failure
+- if no useful text was recovered, fail closed with `ReasonParseFailed`
 
-The implementation plan should choose one of these before coding. My
-recommendation is: assemble only choice index `0` in v1, and document that
-clearly in code comments and tests.
+Multi-choice and tool-call behavior:
+
+- do not silently assemble only choice `0`
+- do not inject placeholder text into assembled output
+- instead, expose explicit metadata via `ReasonUnsupportedMultiChoice` or
+  `ReasonUnsupportedToolCallStream` and fall back to raw view
 
 Why:
 
-- it matches common usage
-- it keeps the first implementation small
-- it avoids inventing a multi-choice UI prematurely
+- partial recovery is better than discarding obviously useful text
+- explicit unsupported reasons avoid misleading output
+- avoiding placeholder injection keeps assembled text semantically clean
 
 ### 2. Update management API: `internal/management/api.go`
 
@@ -214,7 +227,6 @@ type logDetailResponse struct {
 }
 
 type streamViewResponse struct {
-    RawBody            string `json:"raw_body"`
     AssembledBody      string `json:"assembled_body,omitempty"`
     AssembledAvailable bool   `json:"assembled_available"`
     Reason             string `json:"reason"`
@@ -233,6 +245,7 @@ Why:
 - keeps parsing logic out of JS
 - limits API churn to the detail endpoint
 - avoids affecting CLI/TUI or list/table rendering
+- avoids duplicating `resp_body` in large detail responses
 
 Test impact:
 
@@ -247,10 +260,16 @@ Add or update tests covering:
 - `/api/logs/{id}` returns `entry` plus `stream_view`
 - supported chat SSE returns `assembled_available=true`
 - supported completions SSE returns expected `assembled_body`
+- partially parsed streams return `assembled_available=true` with reason
+  `partial_parse`
 - truncated responses return `assembled_available=false` with reason
   `truncated`
 - non-stream response returns `assembled_available=false`
 - unsupported path returns `assembled_available=false`
+- multi-choice stream returns `assembled_available=false` with reason
+  `unsupported_multi_choice`
+- tool-call stream returns `assembled_available=false` with reason
+  `unsupported_tool_call_stream`
 
 Also keep the existing auth and empty-state tests intact.
 
@@ -267,7 +286,8 @@ Required changes:
 
 - extend `Model` with a stream view state for detail mode
 - default detail view mode to `Raw`
-- when a detail entry loads, call `streamview.Build(*entry)`
+- when a detail entry loads, call `streamview.Build(*entry)` inside the
+  background `tea.Cmd`, not inside `Update()`
 - render a mode indicator in the detail panel
 - add a keybinding to toggle modes only when assembled mode is available
 
@@ -289,6 +309,8 @@ Suggested detail rendering behavior:
 - always show metadata near the response section:
   - `Stream View: Raw`
   - `Stream View: Assembled`
+- if the assembled result is partial, show a warning such as:
+  - `Assembled (partial parse)`
 - if assembled is unavailable, show:
   - `Assembled unavailable: truncated`
   - or equivalent human-readable message
@@ -314,6 +336,7 @@ Recommended tests:
 - detail view defaults to `Raw`
 - pressing `v` switches to `Assembled` when available
 - pressing `v` does nothing when assembled is unavailable
+- detail view displays a partial-parse warning when applicable
 - detail view displays availability reason for truncated streams
 - detail view renders expected assembled text for a supported sample entry
 
@@ -377,6 +400,12 @@ testable without introducing frontend tooling just for this change, the web UI
 should remain intentionally thin and rely on the Go API contract for the hard
 logic.
 
+Rendering note:
+
+- assembled output must be treated as plain text
+- pass it through the same escaping path as raw output
+- render it inside a `<pre>` or equivalent plain-text container
+
 ### 8. Update web UI styling: `internal/web/static/style.css`
 
 Add minimal styles for:
@@ -424,6 +453,9 @@ Do not rely only on stored response headers for eligibility, because:
 - headers may be absent in some edge cases
 - body inspection is enough for v1
 
+Normalize SSE framing so both `\n\n` and `\r\n\r\n` event separators are
+handled correctly.
+
 ### `/v1/chat/completions`
 
 For each SSE `data:` payload:
@@ -431,14 +463,15 @@ For each SSE `data:` payload:
 - ignore `[DONE]`
 - decode JSON
 - inspect `choices`
+- if more than one choice is present, fail with `ReasonUnsupportedMultiChoice`
 - append `choices[0].delta.content` when present
 
-Ignore for v1:
+Handle for v1:
 
-- role-only deltas
-- tool call deltas
-- function-call fragments
-- usage events
+- role-only deltas: ignore
+- tool call deltas: fail with `ReasonUnsupportedToolCallStream`
+- function-call fragments: fail with `ReasonUnsupportedToolCallStream`
+- usage events: ignore
 
 If the stream contains only ignored deltas and no text content, assembled mode
 may still be considered available but yield an empty string. That should be
@@ -449,24 +482,38 @@ decided explicitly during implementation. My recommendation is:
 
 This is less surprising than treating a valid textless stream as a parse error.
 
+If parsing later fails after some valid text has already been accumulated:
+
+- return the accumulated text
+- mark the result `ReasonPartialParse`
+- keep `AssembledAvailable = true`
+
 ### `/v1/completions`
 
 For each SSE `data:` payload:
 
 - ignore `[DONE]`
 - decode JSON
+- if more than one choice is present, fail with `ReasonUnsupportedMultiChoice`
 - append `choices[0].text` when present
 
 ### Failure behavior
 
 Treat the following as `Assembled unavailable`:
 
-- invalid JSON in a `data:` event
+- invalid JSON in an early `data:` event before any text is recovered
 - malformed SSE framing that prevents event extraction
 - unsupported path
 - truncated response
+- multi-choice response
+- tool-call stream
 
 The returned reason should be machine-stable so tests can assert it.
+
+Treat the following as `Assembled available with warning`:
+
+- malformed or incomplete later event after recoverable text has already been
+  assembled
 
 ## Sequence of Work
 
@@ -493,12 +540,16 @@ Table-driven tests should cover:
 - supported chat SSE with multiple text deltas
 - supported completions SSE with multiple text chunks
 - `[DONE]` handling
+- CRLF-framed SSE input
 - empty SSE payload lines
 - non-SSE body
-- invalid JSON event
+- invalid JSON event before any text
+- invalid JSON event after valid text
 - truncated response
 - unsupported path
 - missing response body
+- multi-choice response
+- tool-call stream
 
 Also include realistic fixtures that resemble OpenAI-compatible stream payloads.
 
@@ -520,6 +571,7 @@ Add tests for:
 - mode toggle behavior
 - rendered content in raw mode
 - rendered content in assembled mode
+- rendered content in partial-parse mode
 - unavailability messaging
 
 ### Manual verification: web UI
@@ -531,7 +583,8 @@ verified manually after implementation:
 2. generate at least one streamed `/v1/chat/completions` log
 3. open the detail view in the browser
 4. confirm `Raw` and `Assembled` both render
-5. confirm a truncated sample shows only `Raw`
+5. confirm a partial-parse sample shows assembled text with warning state
+6. confirm a truncated sample shows only `Raw`
 
 ## Risks and Mitigations
 
@@ -548,6 +601,7 @@ Mitigation:
 
 - define narrow v1 parsing rules
 - ignore unsupported delta fields
+- reject unsupported tool-call streams explicitly
 - document the limitation in README
 
 ### Risk: accidental API break for the web UI
@@ -584,6 +638,7 @@ The feature is complete when:
 3. supported streamed log entries can be viewed as `Raw` or `Assembled` in the
    web UI
 4. unsupported, truncated, or unparsable streams clearly fall back to `Raw`
-5. parser logic is covered by Go unit tests
-6. management API contract is covered by integration tests
-7. TUI toggle behavior is covered by tests
+5. partially parseable streams can show recovered text with a warning state
+6. parser logic is covered by Go unit tests
+7. management API contract is covered by integration tests
+8. TUI toggle behavior is covered by tests

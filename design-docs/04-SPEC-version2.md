@@ -19,7 +19,8 @@ canonical record. Viewers may additionally offer a derived `Stream view mode`
 with:
 
 - `Raw`: exact stored response body
-- `Assembled`: reconstructed text for supported streamed endpoints
+- `Assembled`: reconstructed text for supported streamed endpoints, including a
+  partial-warning state when recovery is possible from an interrupted stream
 
 ## 2. Goals
 
@@ -154,7 +155,8 @@ Supported viewers may offer:
 
 - `Raw`: exact stored response body, including SSE framing and event boundaries
 - `Assembled`: derived text reconstructed from supported streamed response
-  formats
+  formats, or a partial assembled result with explicit warning metadata when
+  recovery is possible
 
 ### 7.3 Scope of Assembled Mode
 
@@ -169,7 +171,7 @@ Assembled mode is only available when:
 - a response body is present
 - the stored response body is not truncated
 - the body appears to be a parseable SSE stream
-- parsing succeeds
+- parsing succeeds, or parsing partially succeeds with recoverable text
 
 If any of these conditions fail, viewers must fall back to `Raw`.
 
@@ -178,13 +180,19 @@ If any of these conditions fail, viewers must fall back to `Raw`.
 For `/v1/chat/completions`:
 
 - assemble text from streamed `choices[0].delta.content` fragments
-- ignore non-text delta fields in v1
+- reject multi-choice streams as unsupported in v2
+- reject tool-call / function-call streams as unsupported in v2
 
 For `/v1/completions`:
 
 - assemble text from streamed `choices[0].text` fragments
+- reject multi-choice streams as unsupported in v2
 
-In v1, assembled rendering is defined only for choice index `0`.
+In v2, assembled rendering is defined only for single-choice text streams.
+
+If parsing fails only after some valid text has already been recovered, viewers
+may present the recovered text with a partial-warning state rather than
+discarding it entirely.
 
 ### 7.5 Viewer Scope
 
@@ -354,7 +362,6 @@ Response shape:
 {
   "entry": { /* log entry */ },
   "stream_view": {
-    "raw_body": "...",
     "assembled_body": "...",
     "assembled_available": true,
     "reason": "supported",
@@ -366,8 +373,12 @@ Response shape:
 Notes:
 
 - `assembled_body` may be omitted or empty when assembled mode is unavailable
-- `reason` is machine-stable and indicates why assembled mode is or is not
-  available
+- `reason` is machine-stable and indicates whether assembled mode is fully
+  available, partially available, or unavailable
+- `reason` values may include `supported`, `partial_parse`, `truncated`,
+  `unsupported_path`, `unsupported_multi_choice`,
+  `unsupported_tool_call_stream`, `not_sse`, `missing_body`, and
+  `parse_failed`
 
 ### 10.5 `/last-request` and `/last-response`
 
@@ -451,6 +462,7 @@ Required detail behavior:
 - display request and response headers and bodies
 - for supported streamed responses, toggle `Stream view mode` between `Raw` and
   `Assembled`
+- if the assembled result is partial, display a clear warning state
 
 The v2 TUI does not require arbitrary text search, path filters, or time-range
 editing from inside the terminal UI.
@@ -470,6 +482,8 @@ Required capabilities:
 - detail overlay for a selected log entry
 - in the detail overlay, `Stream view mode` with `Raw` and `Assembled` where
   assembled mode is available
+- when assembled mode is partial, show a warning state without rendering the
+  content as HTML
 
 ## 14. Observability and Security
 
@@ -516,5 +530,7 @@ implementation-defined application metrics.
    modes.
 7. The Web UI can display supported streamed responses in `Raw` and
    `Assembled` modes.
-8. For truncated, unsupported, or unparsable streamed responses, viewers fall
-   back to `Raw`.
+8. For partially recoverable streamed responses, viewers can display recovered
+   assembled text with a warning state.
+9. For truncated, unsupported, or fully unparsable streamed responses, viewers
+   fall back to `Raw`.
