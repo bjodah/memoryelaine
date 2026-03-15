@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/streamview"
 )
 
 type viewMode int
@@ -20,25 +21,34 @@ const (
 )
 
 type Model struct {
-	mode    viewMode
-	reader  *database.LogReader
-	filter  database.QueryFilter
-	entries []database.LogEntry
-	total   int64
-	cursor  int
-	detail  *database.LogEntry
-	scroll  int
-	err     error
-	width   int
-	height  int
-	quit    bool
+	mode       viewMode
+	reader     *database.LogReader
+	filter     database.QueryFilter
+	entries    []database.LogEntry
+	total      int64
+	cursor     int
+	detail     *database.LogEntry
+	streamView streamViewState
+	scroll     int
+	err        error
+	width      int
+	height     int
+	quit       bool
+}
+
+type streamViewState struct {
+	mode   streamview.Mode
+	result streamview.Result
 }
 
 type logsLoadedMsg struct {
 	entries []database.LogEntry
 	total   int64
 }
-type logDetailMsg struct{ entry *database.LogEntry }
+type logDetailMsg struct {
+	entry      *database.LogEntry
+	streamView streamview.Result
+}
 type errMsg struct{ err error }
 
 func initialModel(reader *database.LogReader) Model {
@@ -74,6 +84,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case logDetailMsg:
 		m.detail = msg.entry
+		m.streamView = streamViewState{
+			mode:   streamview.ModeRaw,
+			result: msg.streamView,
+		}
 		m.mode = modeDetail
 		m.scroll = 0
 		return m, nil
@@ -98,6 +112,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "k", "up":
 			if m.scroll > 0 {
 				m.scroll--
+			}
+			return m, nil
+		case "v":
+			if m.streamView.result.AssembledAvailable {
+				if m.streamView.mode == streamview.ModeRaw {
+					m.streamView.mode = streamview.ModeAssembled
+				} else {
+					m.streamView.mode = streamview.ModeRaw
+				}
 			}
 			return m, nil
 		}
@@ -239,6 +262,15 @@ func (m Model) detailView() string {
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Log #%d", e.ID)))
 	b.WriteString("\n")
 
+	// Determine response body content based on stream view mode
+	respBodyContent := fmtStrPtr(e.RespBody)
+	if m.streamView.mode == streamview.ModeAssembled && m.streamView.result.AssembledAvailable {
+		respBodyContent = m.streamView.result.AssembledBody
+	}
+
+	// Stream view status line
+	svStatus := m.streamViewStatusLine()
+
 	lines := []string{
 		fmt.Sprintf("Time:     %s → %s", fmtMs(e.TsStart), fmtMsPtr(e.TsEnd)),
 		fmt.Sprintf("Duration: %s", fmtDur(e.DurationMs)),
@@ -259,7 +291,8 @@ func (m Model) detailView() string {
 		fmtStrPtr(e.RespHeadersJSON),
 		"",
 		fmt.Sprintf("─── Response Body (%d bytes%s) ───", e.RespBytes, truncLabel(e.RespTruncated)),
-		truncStr(fmtStrPtr(e.RespBody), 2000),
+		svStatus,
+		truncStr(respBodyContent, 2000),
 	}
 
 	viewH := m.height - 3
@@ -283,8 +316,26 @@ func (m Model) detailView() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll"))
+	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view"))
 	return b.String()
+}
+
+func (m Model) streamViewStatusLine() string {
+	sv := m.streamView
+	if !sv.result.AssembledAvailable {
+		reason := string(sv.result.Reason)
+		if reason == "" {
+			return ""
+		}
+		return fmt.Sprintf("Stream View: Raw (assembled unavailable: %s)", reason)
+	}
+	if sv.mode == streamview.ModeAssembled {
+		if sv.result.Reason == streamview.ReasonPartialParse {
+			return "Stream View: Assembled (partial parse)"
+		}
+		return "Stream View: Assembled"
+	}
+	return "Stream View: Raw [press v to toggle]"
 }
 
 func (m Model) loadLogs() tea.Msg {
@@ -305,7 +356,8 @@ func (m Model) loadDetail(id int64) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return logDetailMsg{entry}
+		sv := streamview.Build(entry)
+		return logDetailMsg{entry: entry, streamView: sv}
 	}
 }
 

@@ -9,7 +9,19 @@ import (
 	"strings"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/streamview"
 )
+
+type logDetailResponse struct {
+	Entry      *database.LogEntry `json:"entry"`
+	StreamView streamViewResponse `json:"stream_view"`
+}
+
+type streamViewResponse struct {
+	AssembledBody      string `json:"assembled_body,omitempty"`
+	AssembledAvailable bool   `json:"assembled_available"`
+	Reason             string `json:"reason"`
+}
 
 func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -90,8 +102,18 @@ func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
 			return
 		}
 
+		sv := streamview.Build(entry)
+		resp := logDetailResponse{
+			Entry: entry,
+			StreamView: streamViewResponse{
+				AssembledBody:      sv.AssembledBody,
+				AssembledAvailable: sv.AssembledAvailable,
+				Reason:             string(sv.Reason),
+			},
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(entry); err != nil {
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			slog.Error("encoding log entry response", "id", id, "error", err)
 		}
 	}
