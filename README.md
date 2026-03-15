@@ -240,3 +240,12 @@ Once the proxy is running:
 - send client traffic to proxy.listen_addr
 - browse the management UI on management.listen_addr
 - inspect logs with `memoryelaine log` or `memoryelaine tui`
+
+
+## Repository layout
+
+Specifications, implementation plans etc. are found under `design-docs-wip/`, `design-docs-main/`,
+and `design-docs-legacy/`. The `-wip` folder is "work in progress" (should typically be empty when
+we are on `main` branch), the `-main` folder should typically describe the state of the main-branch
+/ "what's released", the `-legacy` folder is typically of little interest and is to be considered a
+historical legacy and typically contains documents that are out-of-date.
