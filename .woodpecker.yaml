@@ -29,5 +29,5 @@ steps:
      - event: push
        repo: bjodah/memoryelaine
     depends_on:
-      - run-test-suite
+      - restore-cache
 
