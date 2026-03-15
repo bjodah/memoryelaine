@@ -90,6 +90,8 @@ misleading assembled string. In particular:
 - multi-choice streams should not silently display only choice `0`
 - tool-call-only streams should not display a blank assembled result as if
   nothing happened
+- textless streams (e.g. role-only or usage-only deltas with no text content)
+  should not display a blank assembled result as if content existed
 
 These cases should surface explicit status metadata and fall back to `Raw`.
 

@@ -45,7 +45,7 @@ When running, it starts:
     - GET /           : embedded Web UI (Basic Auth protected)
     - GET /api/logs   : JSON list API (Basic Auth protected)
     - GET /api/logs/{id}
-                      : JSON detail API (Basic Auth protected)
+                      : JSON detail API with stream-view metadata (Basic Auth protected)
     - GET /last-request
                       : latest captured request body (Basic Auth protected)
     - GET /last-response
@@ -109,11 +109,30 @@ The terminal UI opens against the configured SQLite database and supports:
   - j/k or arrow keys: move through the table
   - enter            : open detail view for the selected row
   - esc or q         : leave detail view
+  - j/k              : scroll in detail view
+  - v                : toggle stream view mode (Raw / Assembled) in detail view
   - r                : refresh current page
   - n / p            : next / previous page
   - f                : cycle exact status filters: none -> 200 -> 400 -> 500 -> none
   - q / ctrl+c       : quit from the table view
 ```
+
+### Stream view mode
+
+When viewing a streamed response in the detail view, the TUI and Web UI offer
+a **Stream View** toggle:
+
+- **Raw**: the exact stored response body, including SSE framing
+- **Assembled**: reconstructed assistant text derived from the SSE stream
+
+Assembled mode is currently supported for:
+
+- `/v1/chat/completions`
+- `/v1/completions`
+
+Assembled mode is unavailable for truncated, non-streamed, or unsupported
+responses. When parsing only partially succeeds, the recovered text is shown
+with a warning indicator.
 
 ## Config file schema
 

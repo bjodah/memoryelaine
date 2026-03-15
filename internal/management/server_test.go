@@ -199,6 +199,244 @@ func TestAPILogByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestAPILogByID_WrappedResponseShape(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: [DONE]\n\n"
+	entry := database.LogEntry{
+		TsStart:         1,
+		ClientIP:        "127.0.0.1",
+		RequestMethod:   "POST",
+		RequestPath:     "/v1/chat/completions",
+		UpstreamURL:     "https://example.com/v1/chat/completions",
+		ReqHeadersJSON:  "{}",
+		ReqBody:         `{"model":"gpt-4"}`,
+		ReqBytes:        17,
+		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
+		RespBody:        &body,
+		RespBytes:       int64(len(body)),
+	}
+	if !deps.LogWriter.Enqueue(entry) {
+		t.Fatal("enqueue failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps.LogWriter.Run(ctx)
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/logs/1", nil)
+	req.SetBasicAuth("admin", "test123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Entry      json.RawMessage `json:"entry"`
+		StreamView struct {
+			AssembledBody      string `json:"assembled_body"`
+			AssembledAvailable bool   `json:"assembled_available"`
+			Reason             string `json:"reason"`
+		} `json:"stream_view"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Entry == nil {
+		t.Fatal("expected entry in response")
+	}
+	if !result.StreamView.AssembledAvailable {
+		t.Errorf("expected assembled_available=true, got false (reason=%s)", result.StreamView.Reason)
+	}
+	if result.StreamView.AssembledBody != "Hello" {
+		t.Errorf("expected assembled_body %q, got %q", "Hello", result.StreamView.AssembledBody)
+	}
+	if result.StreamView.Reason != "supported" {
+		t.Errorf("expected reason %q, got %q", "supported", result.StreamView.Reason)
+	}
+}
+
+func TestAPILogByID_NonStreamedResponse(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	respBody := `{"id":"chatcmpl-1","choices":[{"message":{"content":"hello"}}]}`
+	entry := database.LogEntry{
+		TsStart:         1,
+		ClientIP:        "127.0.0.1",
+		RequestMethod:   "POST",
+		RequestPath:     "/v1/chat/completions",
+		UpstreamURL:     "https://example.com/v1/chat/completions",
+		ReqHeadersJSON:  "{}",
+		ReqBody:         `{}`,
+		ReqBytes:        2,
+		RespHeadersJSON: ptr(`{"Content-Type":["application/json"]}`),
+		RespBody:        &respBody,
+		RespBytes:       int64(len(respBody)),
+	}
+	if !deps.LogWriter.Enqueue(entry) {
+		t.Fatal("enqueue failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps.LogWriter.Run(ctx)
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/logs/1", nil)
+	req.SetBasicAuth("admin", "test123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var result struct {
+		StreamView struct {
+			AssembledAvailable bool   `json:"assembled_available"`
+			Reason             string `json:"reason"`
+		} `json:"stream_view"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.StreamView.AssembledAvailable {
+		t.Error("expected assembled_available=false for non-SSE response")
+	}
+	if result.StreamView.Reason != "not_sse" {
+		t.Errorf("expected reason %q, got %q", "not_sse", result.StreamView.Reason)
+	}
+}
+
+func TestAPILogByID_TruncatedResponse(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	body := "data: partial...\n\n"
+	entry := database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{}`,
+		ReqBytes:       2,
+		RespBody:       &body,
+		RespTruncated:  true,
+		RespBytes:      100000,
+	}
+	if !deps.LogWriter.Enqueue(entry) {
+		t.Fatal("enqueue failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps.LogWriter.Run(ctx)
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/logs/1", nil)
+	req.SetBasicAuth("admin", "test123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var result struct {
+		StreamView struct {
+			AssembledAvailable bool   `json:"assembled_available"`
+			Reason             string `json:"reason"`
+		} `json:"stream_view"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.StreamView.AssembledAvailable {
+		t.Error("expected assembled_available=false for truncated response")
+	}
+	if result.StreamView.Reason != "truncated" {
+		t.Errorf("expected reason %q, got %q", "truncated", result.StreamView.Reason)
+	}
+}
+
+func TestAPILogByID_UnsupportedPath(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	body := "data: {}\n\n"
+	entry := database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/embeddings",
+		UpstreamURL:    "https://example.com/v1/embeddings",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{}`,
+		ReqBytes:       2,
+		RespBody:       &body,
+		RespBytes:      int64(len(body)),
+	}
+	if !deps.LogWriter.Enqueue(entry) {
+		t.Fatal("enqueue failed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps.LogWriter.Run(ctx)
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/logs/1", nil)
+	req.SetBasicAuth("admin", "test123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var result struct {
+		StreamView struct {
+			AssembledAvailable bool   `json:"assembled_available"`
+			Reason             string `json:"reason"`
+		} `json:"stream_view"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.StreamView.AssembledAvailable {
+		t.Error("expected assembled_available=false for unsupported path")
+	}
+	if result.StreamView.Reason != "unsupported_path" {
+		t.Errorf("expected reason %q, got %q", "unsupported_path", result.StreamView.Reason)
+	}
+}
+
 func TestLastRequestAndResponse_Empty(t *testing.T) {
 	deps := setupTestDeps(t)
 	mux := NewMux(deps)

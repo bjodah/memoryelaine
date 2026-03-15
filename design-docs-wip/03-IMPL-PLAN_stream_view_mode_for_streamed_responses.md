@@ -62,7 +62,9 @@ Why:
 - `request_path` is supported
 - `resp_truncated` is `false`
 - `resp_body` is present
-- the response looks like SSE
+- the response looks like SSE (body contains `data:` lines, and stored response
+  headers include `content-type: text/event-stream` when headers are available;
+  if headers are absent, body inspection alone is sufficient)
 - parsing either succeeds fully or succeeds partially with recoverable text
 
 Why:
@@ -129,6 +131,7 @@ const (
     ReasonUnsupportedPath    AvailabilityReason = "unsupported_path"
     ReasonUnsupportedMultiChoice AvailabilityReason = "unsupported_multi_choice"
     ReasonUnsupportedToolCallStream AvailabilityReason = "unsupported_tool_call_stream"
+    ReasonNoTextContent  AvailabilityReason = "no_text_content"
     ReasonMissingBody        AvailabilityReason = "missing_body"
     ReasonTruncated          AvailabilityReason = "truncated"
     ReasonNotSSE             AvailabilityReason = "not_sse"
@@ -140,10 +143,9 @@ type Result struct {
     AssembledBody      string
     AssembledAvailable bool
     Reason             AvailabilityReason
-    Format             string
 }
 
-func Build(entry database.LogEntry) Result
+func Build(entry *database.LogEntry) Result
 ```
 
 Responsibilities:
@@ -153,6 +155,8 @@ Responsibilities:
 - dispatch to endpoint-specific assembly helpers
 - report whether assembled mode is fully available, partially available, or
   unavailable
+
+`Build` takes a `*database.LogEntry` pointer to avoid copying the struct.
 
 Why this structure:
 
@@ -180,6 +184,10 @@ For `/v1/chat/completions`:
   `ReasonUnsupportedMultiChoice`
 - detect tool-call / function-call deltas and reject with
   `ReasonUnsupportedToolCallStream`
+- handle `choices` being an empty array (e.g. usage-only chunks): skip the
+  event without error
+- handle `choices[0].delta.content` being JSON `null` or absent: skip the
+  event without error
 
 For `/v1/completions`:
 
@@ -187,6 +195,9 @@ For `/v1/completions`:
 - append chunks in order
 - detect and reject multi-choice streams with
   `ReasonUnsupportedMultiChoice`
+- handle `choices` being an empty array: skip the event without error
+- handle `choices[0].text` being JSON `null` or absent: skip the event
+  without error
 
 Partial parse behavior:
 
@@ -230,7 +241,6 @@ type streamViewResponse struct {
     AssembledBody      string `json:"assembled_body,omitempty"`
     AssembledAvailable bool   `json:"assembled_available"`
     Reason             string `json:"reason"`
-    Format             string `json:"format,omitempty"`
 }
 ```
 
@@ -246,6 +256,9 @@ Why:
 - limits API churn to the detail endpoint
 - avoids affecting CLI/TUI or list/table rendering
 - avoids duplicating `resp_body` in large detail responses
+
+There are no known external consumers of this API. The only consumer is the
+embedded web UI, so this breaking change to the response shape is safe.
 
 Test impact:
 
@@ -270,6 +283,8 @@ Add or update tests covering:
   `unsupported_multi_choice`
 - tool-call stream returns `assembled_available=false` with reason
   `unsupported_tool_call_stream`
+- textless stream returns `assembled_available=false` with reason
+  `no_text_content`
 
 Also keep the existing auth and empty-state tests intact.
 
@@ -316,6 +331,10 @@ Suggested detail rendering behavior:
   - or equivalent human-readable message
 - response body section renders either `result.RawBody` or
   `result.AssembledBody`
+- the existing 2000-character display truncation (`truncStr`) should apply
+  equally to both raw and assembled views for consistency; the assembled text
+  is typically much shorter than the raw SSE stream, so this limit will
+  rarely be hit in practice
 
 Why:
 
@@ -453,6 +472,11 @@ Do not rely only on stored response headers for eligibility, because:
 - headers may be absent in some edge cases
 - body inspection is enough for v1
 
+However, when `resp_headers_json` is available and contains a `content-type`
+header, use it as an additional signal: if `content-type` is present and does
+not include `text/event-stream`, skip assembly early. If headers are absent,
+fall through to body inspection.
+
 Normalize SSE framing so both `\n\n` and `\r\n\r\n` event separators are
 handled correctly.
 
@@ -474,13 +498,9 @@ Handle for v1:
 - usage events: ignore
 
 If the stream contains only ignored deltas and no text content, assembled mode
-may still be considered available but yield an empty string. That should be
-decided explicitly during implementation. My recommendation is:
-
-- assembled mode is available
-- assembled body may be empty
-
-This is less surprising than treating a valid textless stream as a parse error.
+should not be offered. The viewer should fall back to `Raw` with
+`ReasonNoTextContent`. This avoids presenting an empty assembled view that looks
+broken.
 
 If parsing later fails after some valid text has already been accumulated:
 
@@ -507,6 +527,7 @@ Treat the following as `Assembled unavailable`:
 - truncated response
 - multi-choice response
 - tool-call stream
+- textless stream (all events parsed but no text content recovered)
 
 The returned reason should be machine-stable so tests can assert it.
 
@@ -550,6 +571,11 @@ Table-driven tests should cover:
 - missing response body
 - multi-choice response
 - tool-call stream
+- empty `choices` array in SSE events (usage-only chunks)
+- JSON `null` for `delta.content` or `text` fields
+- textless stream (role-only or usage-only deltas with no text content)
+- Content-Type header present and not `text/event-stream`
+- Content-Type header absent (fall through to body inspection)
 
 Also include realistic fixtures that resemble OpenAI-compatible stream payloads.
 

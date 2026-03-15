@@ -81,7 +81,53 @@
     async function showDetail(id) {
         try {
             const resp = await fetch(`/api/logs/${id}`);
-            const entry = await resp.json();
+            const data = await resp.json();
+            const entry = data.entry;
+            const sv = data.stream_view;
+            let currentMode = 'raw';
+
+            function renderResponseBody() {
+                const bodyEl = document.getElementById('resp-body-content');
+                const toggleBtns = document.querySelectorAll('.sv-toggle-btn');
+                const svMsg = document.getElementById('sv-message');
+
+                if (currentMode === 'assembled' && sv.assembled_available) {
+                    bodyEl.textContent = sv.assembled_body || '';
+                } else {
+                    bodyEl.textContent = entry.resp_body || '';
+                }
+
+                toggleBtns.forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === currentMode);
+                });
+
+                if (sv.assembled_available && sv.reason === 'partial_parse' && currentMode === 'assembled') {
+                    svMsg.textContent = 'Assembled (partial parse)';
+                    svMsg.classList.remove('hidden');
+                } else {
+                    svMsg.classList.add('hidden');
+                }
+            }
+
+            let svToggleHTML = '';
+            if (sv.assembled_available) {
+                svToggleHTML = `
+                    <div class="sv-toggle">
+                        <button class="sv-toggle-btn active" data-mode="raw">Raw</button>
+                        <button class="sv-toggle-btn" data-mode="assembled">Assembled</button>
+                        <span id="sv-message" class="sv-message hidden"></span>
+                    </div>`;
+            } else if (sv.reason && sv.reason !== 'unsupported_path' && sv.reason !== 'missing_body') {
+                svToggleHTML = `
+                    <div class="sv-toggle">
+                        <button class="sv-toggle-btn active" data-mode="raw">Raw</button>
+                        <button class="sv-toggle-btn" data-mode="assembled" disabled>Assembled</button>
+                        <span id="sv-message" class="sv-message">${escapeHTML(sv.reason)}</span>
+                    </div>`;
+            } else {
+                svToggleHTML = '<span id="sv-message" class="sv-message hidden"></span>';
+            }
+
             detailContent.innerHTML = `
                 <h2>Log #${entry.id}</h2>
                 <dl>
@@ -101,8 +147,20 @@
                 <h3>Response Headers</h3>
                 <pre>${formatJSON(entry.resp_headers_json)}</pre>
                 <h3>Response Body (${formatBytes(entry.resp_bytes)}${entry.resp_truncated ? ' TRUNCATED' : ''})</h3>
-                <pre>${escapeHTML(entry.resp_body || '')}</pre>
+                ${svToggleHTML}
+                <pre id="resp-body-content"></pre>
             `;
+
+            renderResponseBody();
+
+            detailContent.querySelectorAll('.sv-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (btn.disabled) return;
+                    currentMode = btn.dataset.mode;
+                    renderResponseBody();
+                });
+            });
+
             detailOverlay.classList.remove('hidden');
         } catch (e) {
             alert('Failed to load detail: ' + e.message);

@@ -170,8 +170,12 @@ Assembled mode is only available when:
 - the request path is supported
 - a response body is present
 - the stored response body is not truncated
-- the body appears to be a parseable SSE stream
-- parsing succeeds, or parsing partially succeeds with recoverable text
+- the body appears to be a parseable SSE stream (contains `data:` lines; when
+  stored response headers are available, a `content-type` of
+  `text/event-stream` serves as additional confirmation; when headers are
+  absent, body inspection alone is sufficient)
+- parsing succeeds with at least some recovered text content, or parsing
+  partially succeeds with recoverable text
 
 If any of these conditions fail, viewers must fall back to `Raw`.
 
@@ -182,13 +186,22 @@ For `/v1/chat/completions`:
 - assemble text from streamed `choices[0].delta.content` fragments
 - reject multi-choice streams as unsupported in v2
 - reject tool-call / function-call streams as unsupported in v2
+- handle empty `choices` arrays (e.g. usage-only chunks) by skipping the event
+- handle `choices[0].delta.content` being JSON `null` or absent by skipping
+  the event
 
 For `/v1/completions`:
 
 - assemble text from streamed `choices[0].text` fragments
 - reject multi-choice streams as unsupported in v2
+- handle empty `choices` arrays by skipping the event
+- handle `choices[0].text` being JSON `null` or absent by skipping the event
 
 In v2, assembled rendering is defined only for single-choice text streams.
+
+If the stream parses completely but yields no text content (e.g. role-only or
+usage-only deltas), assembled mode is unavailable and the viewer falls back to
+`Raw`.
 
 If parsing fails only after some valid text has already been recovered, viewers
 may present the recovered text with a partial-warning state rather than
@@ -364,8 +377,7 @@ Response shape:
   "stream_view": {
     "assembled_body": "...",
     "assembled_available": true,
-    "reason": "supported",
-    "format": "openai_chat_completions_sse"
+    "reason": "supported"
   }
 }
 ```
@@ -377,8 +389,8 @@ Notes:
   available, partially available, or unavailable
 - `reason` values may include `supported`, `partial_parse`, `truncated`,
   `unsupported_path`, `unsupported_multi_choice`,
-  `unsupported_tool_call_stream`, `not_sse`, `missing_body`, and
-  `parse_failed`
+  `unsupported_tool_call_stream`, `no_text_content`, `not_sse`,
+  `missing_body`, and `parse_failed`
 
 ### 10.5 `/last-request` and `/last-response`
 
