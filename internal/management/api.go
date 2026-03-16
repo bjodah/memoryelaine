@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 	"memoryelaine/internal/streamview"
 )
 
@@ -21,6 +22,10 @@ type streamViewResponse struct {
 	AssembledBody      string `json:"assembled_body,omitempty"`
 	AssembledAvailable bool   `json:"assembled_available"`
 	Reason             string `json:"reason"`
+}
+
+type recordingStateResponse struct {
+	Recording bool `json:"recording"`
 }
 
 func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
@@ -119,13 +124,34 @@ func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
 	}
 }
 
+func apiRecordingHandler(state *recording.State) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeRecordingState(w, state.Enabled())
+		case http.MethodPut:
+			var req recordingStateResponse
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid json body", http.StatusBadRequest)
+				return
+			}
+			state.SetEnabled(req.Recording)
+			writeRecordingState(w, state.Enabled())
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 func lastRequestHandler(reader *database.LogReader, writer *database.LogWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if body, ok := writer.LastRequest(); ok {
-			writeTextBody(w, body)
+		if body, ok, stale := writer.LastRequest(); ok {
+			writeTextBody(w, body, stale)
 			return
 		}
 
+		_, _, stale := writer.LastRequest()
 		entry, err := reader.GetLatest()
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -136,17 +162,18 @@ func lastRequestHandler(reader *database.LogReader, writer *database.LogWriter) 
 			return
 		}
 
-		writeTextBody(w, entry.ReqBody)
+		writeTextBody(w, entry.ReqBody, stale)
 	}
 }
 
 func lastResponseHandler(reader *database.LogReader, writer *database.LogWriter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if body, ok := writer.LastResponse(); ok {
-			writeTextBody(w, body)
+		if body, ok, stale := writer.LastResponse(); ok {
+			writeTextBody(w, body, stale)
 			return
 		}
 
+		_, _, stale := writer.LastResponse()
 		entry, err := reader.GetLatest()
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -161,12 +188,22 @@ func lastResponseHandler(reader *database.LogReader, writer *database.LogWriter)
 		if entry.RespBody != nil {
 			body = *entry.RespBody
 		}
-		writeTextBody(w, body)
+		writeTextBody(w, body, stale)
 	}
 }
 
-func writeTextBody(w http.ResponseWriter, body string) {
+func writeRecordingState(w http.ResponseWriter, recording bool) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(recordingStateResponse{Recording: recording}); err != nil {
+		slog.Error("encoding recording state response", "error", err)
+	}
+}
+
+func writeTextBody(w http.ResponseWriter, body string, stale bool) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if stale {
+		body = "[STALE]\n\n" + body
+	}
 	if _, err := w.Write([]byte(body)); err != nil {
 		slog.Error("writing plain-text response", "error", err)
 	}

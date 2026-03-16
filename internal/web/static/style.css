@@ -24,6 +24,9 @@ h1 { font-size: 1.4rem; }
 .controls select, .controls input[type="text"] { padding: 0.3rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
 .controls button { padding: 0.3rem 0.8rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); cursor: pointer; }
 .controls button:hover { background: var(--hover); }
+.controls button.recording-on { border-color: #1f7a3d; color: #1f7a3d; }
+.controls button.recording-off { border-color: #a33a2b; color: #a33a2b; }
+.controls button:disabled { opacity: 0.6; cursor: default; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 thead { position: sticky; top: 0; background: var(--bg); }

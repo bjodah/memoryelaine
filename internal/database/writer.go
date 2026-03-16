@@ -20,6 +20,7 @@ type LogWriter struct {
 type bodySnapshot struct {
 	body  string
 	valid bool
+	stale bool
 }
 
 type lastBodies struct {
@@ -89,10 +90,10 @@ func (w *LogWriter) SetLastRequest(body string) {
 }
 
 // LastRequest returns the most recently captured request body.
-func (w *LogWriter) LastRequest() (string, bool) {
+func (w *LogWriter) LastRequest() (string, bool, bool) {
 	w.last.mu.RLock()
 	defer w.last.mu.RUnlock()
-	return w.last.request.body, w.last.request.valid
+	return w.last.request.body, w.last.request.valid, w.last.request.stale
 }
 
 // SetLastResponse stores the most recently captured response body.
@@ -103,10 +104,18 @@ func (w *LogWriter) SetLastResponse(body string) {
 }
 
 // LastResponse returns the most recently captured response body.
-func (w *LogWriter) LastResponse() (string, bool) {
+func (w *LogWriter) LastResponse() (string, bool, bool) {
 	w.last.mu.RLock()
 	defer w.last.mu.RUnlock()
-	return w.last.response.body, w.last.response.valid
+	return w.last.response.body, w.last.response.valid, w.last.response.stale
+}
+
+// MarkLastBodiesStale marks the cached last request/response bodies as stale.
+func (w *LogWriter) MarkLastBodiesStale() {
+	w.last.mu.Lock()
+	defer w.last.mu.Unlock()
+	w.last.request.stale = true
+	w.last.response.stale = true
 }
 
 // Close closes the prepared statement.

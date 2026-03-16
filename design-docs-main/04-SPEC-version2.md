@@ -76,7 +76,21 @@ All other requests are still proxied, but bypass database logging entirely.
 Path matching is exact string matching. No glob, regex, or prefix matching is
 performed.
 
-### 5.3 Zero-Latency Streaming Intent
+### 5.3 Runtime Recording State
+
+`memoryelaine serve` maintains an in-memory runtime recording state:
+
+- `recording=true`: requests on `proxy.log_paths` are captured and logged
+- `recording=false`: requests on `proxy.log_paths` are still proxied, but
+  request/response capture to SQLite is bypassed entirely
+
+The recording decision is taken at request start.
+
+If a request begins while `recording=true`, it remains fully loggable for its
+lifetime even if recording is later disabled while that request is still
+in-flight.
+
+### 5.4 Zero-Latency Streaming Intent
 
 For captured paths, response streaming must remain pass-through in behavior:
 
@@ -126,7 +140,19 @@ If the queue is full:
 - the dropped-log counter increases
 - an application error is logged to structured stdout
 
-### 6.4 Redaction
+### 6.4 Last Captured Bodies and Staleness
+
+The service maintains in-memory "last captured request body" and "last captured
+response body" values for the `/last-request` and `/last-response` endpoints.
+
+If at least one request on a loggable path is proxied while `recording=false`,
+those endpoints become stale until a newly captured request or response body
+replaces the corresponding stored value.
+
+When stale, the endpoint must clearly label the returned plain-text value as
+stale.
+
+### 6.5 Redaction
 
 The following headers must be removed before storing request or response headers
 in the database:
@@ -135,7 +161,7 @@ in the database:
 - `Cookie`
 - `Set-Cookie`
 
-### 6.5 Raw Storage Is Canonical
+### 6.6 Raw Storage Is Canonical
 
 The database stores raw captured request and response bodies only. No assembled
 stream representation is stored in SQLite.
@@ -334,6 +360,10 @@ Basic Auth is required for all management endpoints except `/health`.
   Paginated JSON list API.
 - `GET /api/logs/{id}`
   JSON detail API for a single record, including derived stream-view metadata.
+- `GET /api/recording`
+  Authenticated JSON endpoint returning the current runtime recording state.
+- `PUT /api/recording`
+  Authenticated JSON endpoint for changing the runtime recording state.
 - `GET /last-request`
   Latest captured request body as plain text.
 - `GET /last-response`
@@ -400,7 +430,31 @@ plain text.
 Because request and response capture happen independently during an active
 exchange, they may briefly be out of sync during in-flight traffic.
 
-### 10.6 `/health`
+If one or more loggable requests have been proxied while recording is disabled,
+these endpoints must label their values as stale until a newly captured body
+replaces the corresponding stored value.
+
+### 10.6 `/api/recording`
+
+`GET /api/recording` returns:
+
+```json
+{
+  "recording": true
+}
+```
+
+`PUT /api/recording` accepts:
+
+```json
+{
+  "recording": false
+}
+```
+
+and returns the new state in the same response shape.
+
+### 10.7 `/health`
 
 `GET /health` returns JSON similar to:
 
@@ -409,6 +463,7 @@ exchange, they may briefly be out of sync during in-flight traffic.
   "status": "ok",
   "db_connected": true,
   "dropped_logs": 0,
+  "recording": true,
   "uptime_seconds": 123
 }
 ```
@@ -491,6 +546,8 @@ Required capabilities:
 - exact path filter via text input
 - body substring search
 - manual refresh and optional auto-refresh
+- visible runtime recording state
+- authenticated toggle of runtime recording state
 - detail overlay for a selected log entry
 - in the detail overlay, `Stream view mode` with `Raw` and `Assembled` where
   assembled mode is available
@@ -524,6 +581,10 @@ implementation-defined application metrics.
 - If the logging queue is full, log entries may be dropped.
 - If the upstream is unreachable, the proxy returns a 502-style failure to the
   client and still attempts to record an error-bearing log entry.
+- If recording is disabled, loggable requests continue to proxy successfully but
+  produce no SQLite log entry.
+- If recording is disabled during an in-flight request that began while
+  recording was enabled, that already-started request may still be fully logged.
 - If stream assembly fails in a viewer, the raw stored response remains
   available.
 
@@ -546,3 +607,7 @@ implementation-defined application metrics.
    assembled text with a warning state.
 9. For truncated, unsupported, or fully unparsable streamed responses, viewers
    fall back to `Raw`.
+10. Recording can be toggled at runtime through the management API and Web UI.
+11. `/health` exposes the current recording state.
+12. `/last-request` and `/last-response` clearly indicate when their values are
+    stale due to paused recording and subsequent loggable traffic.

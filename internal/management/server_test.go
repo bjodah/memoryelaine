@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"memoryelaine/internal/config"
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/recording"
 )
 
 func setupTestDeps(t *testing.T) ServerDeps {
@@ -46,8 +48,9 @@ func setupTestDeps(t *testing.T) ServerDeps {
 	})
 
 	return ServerDeps{
-		Reader:    database.NewLogReader(readerDB),
-		LogWriter: lw,
+		Reader:         database.NewLogReader(readerDB),
+		LogWriter:      lw,
+		RecordingState: recording.NewState(true),
 		Auth: config.AuthConfig{
 			Username: "admin",
 			Password: "test123",
@@ -147,6 +150,9 @@ func TestHealth_NoAuth(t *testing.T) {
 	}
 	if body["db_connected"] != true {
 		t.Errorf("expected db_connected true, got %v", body["db_connected"])
+	}
+	if body["recording"] != true {
+		t.Errorf("expected recording true, got %v", body["recording"])
 	}
 }
 
@@ -516,6 +522,115 @@ func TestLastRequestAndResponse_ReturnLatestBodies(t *testing.T) {
 
 	checkBody("/last-request", entry.ReqBody)
 	checkBody("/last-response", *entry.RespBody)
+}
+
+func TestAPIRecording_GetAndPut(t *testing.T) {
+	deps := setupTestDeps(t)
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/recording", nil)
+	req.SetBasicAuth("admin", "test123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var getBody struct {
+		Recording bool `json:"recording"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&getBody); err != nil {
+		t.Fatal(err)
+	}
+	if !getBody.Recording {
+		t.Fatal("expected recording=true")
+	}
+
+	putReq, _ := http.NewRequest("PUT", srv.URL+"/api/recording", strings.NewReader(`{"recording":false}`))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.SetBasicAuth("admin", "test123")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := putResp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var putBody struct {
+		Recording bool `json:"recording"`
+	}
+	if err := json.NewDecoder(putResp.Body).Decode(&putBody); err != nil {
+		t.Fatal(err)
+	}
+	if putBody.Recording {
+		t.Fatal("expected recording=false after PUT")
+	}
+	if deps.RecordingState.Enabled() {
+		t.Fatal("expected shared recording state to be false")
+	}
+
+	healthResp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := healthResp.Body.Close(); err != nil {
+			t.Errorf("closing response body: %v", err)
+		}
+	}()
+
+	var healthBody map[string]interface{}
+	if err := json.NewDecoder(healthResp.Body).Decode(&healthBody); err != nil {
+		t.Fatal(err)
+	}
+	if healthBody["recording"] != false {
+		t.Fatalf("expected health recording=false, got %v", healthBody["recording"])
+	}
+}
+
+func TestLastRequestAndResponse_StaleLabel(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.LogWriter.SetLastRequest(`{"prompt":"old"}`)
+	deps.LogWriter.SetLastResponse(`{"answer":"old"}`)
+	deps.LogWriter.MarkLastBodiesStale()
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	checkBody := func(path string, want string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		req.SetBasicAuth("admin", "test123")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("closing response body: %v", err)
+			}
+		}()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != want {
+			t.Fatalf("%s expected %q, got %q", path, want, string(body))
+		}
+	}
+
+	checkBody("/last-request", "[STALE]\n\n"+`{"prompt":"old"}`)
+	checkBody("/last-response", "[STALE]\n\n"+`{"answer":"old"}`)
 }
 
 func TestLastEndpoints_FallbackToDatabase(t *testing.T) {

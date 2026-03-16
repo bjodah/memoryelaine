@@ -15,6 +15,7 @@ import (
 	"memoryelaine/internal/database"
 	"memoryelaine/internal/management"
 	"memoryelaine/internal/proxy"
+	"memoryelaine/internal/recording"
 
 	"github.com/spf13/cobra"
 )
@@ -101,6 +102,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	timeout := time.Duration(cfg.Proxy.TimeoutMinutes) * time.Minute
 	rpPlain := proxy.NewPlainReverseProxy(upstream, timeout)
 	rpCapture := proxy.NewReverseProxy(upstream, timeout, cfg.Logging.MaxCaptureBytes)
+	recordingState := recording.NewState(true)
 
 	// 7. Build log path set
 	logPathSet := make(map[string]struct{}, len(cfg.Proxy.LogPaths))
@@ -109,14 +111,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// 8. Build proxy handler
-	proxyHandler := proxy.Handler(rpPlain, rpCapture, logPathSet, cfg.Logging.MaxCaptureBytes, logWriter, upstream)
+	proxyHandler := proxy.Handler(rpPlain, rpCapture, logPathSet, cfg.Logging.MaxCaptureBytes, logWriter, recordingState, upstream)
 
 	// 9. Build management mux
 	logReader := database.NewLogReader(readerDB)
 	mgmtMux := management.NewMux(management.ServerDeps{
-		Reader:    logReader,
-		LogWriter: logWriter,
-		Auth:      cfg.Management.Auth,
+		Reader:         logReader,
+		LogWriter:      logWriter,
+		RecordingState: recordingState,
+		Auth:           cfg.Management.Auth,
 	})
 
 	// 10. Start proxy server

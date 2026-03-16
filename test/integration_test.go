@@ -19,6 +19,7 @@ import (
 
 	"memoryelaine/internal/database"
 	"memoryelaine/internal/proxy"
+	"memoryelaine/internal/recording"
 )
 
 // helper to set up a full proxy stack for testing
@@ -67,7 +68,7 @@ func setupIntegrationProxy(t *testing.T, upstreamHandler http.Handler, maxCaptur
 		"/test":                {},
 	}
 
-	handler := proxy.Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, upstreamURL)
+	handler := proxy.Handler(rpPlain, rpCapture, logPaths, maxCapture, lw, recording.NewState(true), upstreamURL)
 	proxySrv := httptest.NewServer(handler)
 
 	lr := database.NewLogReader(readerDB)
@@ -292,7 +293,7 @@ func TestAcceptance_FailOpen(t *testing.T) {
 	rpPlain := proxy.NewPlainReverseProxy(upstreamURL, 5*time.Second)
 	rpCapture := proxy.NewReverseProxy(upstreamURL, 5*time.Second, 1024)
 	logPaths := map[string]struct{}{"/test": {}}
-	handler := proxy.Handler(rpPlain, rpCapture, logPaths, 1024, lw, upstreamURL)
+	handler := proxy.Handler(rpPlain, rpCapture, logPaths, 1024, lw, recording.NewState(true), upstreamURL)
 	proxySrv := httptest.NewServer(handler)
 
 	// Make DB read-only to trigger write failures
