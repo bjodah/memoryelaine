@@ -11,14 +11,7 @@
         <header>
             <h1>memoryelaine</h1>
             <div class="controls">
-                <select id="status-filter">
-                    <option value="">All Status</option>
-                    <option value="200">200</option>
-                    <option value="400">4xx</option>
-                    <option value="500">5xx</option>
-                </select>
-                <input id="path-filter" type="text" placeholder="Filter by path...">
-                <input id="search-filter" type="text" placeholder="Search bodies...">
+                <input id="query-filter" type="text" placeholder="Query (e.g. status:200 path:/chat hello)...">
                 <button id="refresh-btn">Refresh</button>
                 <label><input id="auto-refresh" type="checkbox"> Auto</label>
                 <button id="recording-toggle-btn" class="recording-on">Recording: ON</button>
