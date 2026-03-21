@@ -22,6 +22,25 @@ type LogEntry struct {
 	Error           *string `json:"error" db:"error"`
 }
 
+// LogSummary contains only the columns needed for list/table views.
+type LogSummary struct {
+	ID            int64   `json:"id" db:"id"`
+	TsStart       int64   `json:"ts_start" db:"ts_start"`
+	TsEnd         *int64  `json:"ts_end" db:"ts_end"`
+	DurationMs    *int64  `json:"duration_ms" db:"duration_ms"`
+	ClientIP      string  `json:"client_ip" db:"client_ip"`
+	RequestMethod string  `json:"request_method" db:"request_method"`
+	RequestPath   string  `json:"request_path" db:"request_path"`
+	StatusCode    *int    `json:"status_code" db:"status_code"`
+	ReqBytes      int64   `json:"req_bytes" db:"req_bytes"`
+	RespBytes     int64   `json:"resp_bytes" db:"resp_bytes"`
+	ReqTruncated  bool    `json:"req_truncated" db:"req_truncated"`
+	RespTruncated bool    `json:"resp_truncated" db:"resp_truncated"`
+	ReqBodyLen    int64   `json:"-" db:"req_body_len"`
+	RespBodyLen   int64   `json:"-" db:"resp_body_len"`
+	Error         *string `json:"error" db:"error"`
+}
+
 // QueryFilter defines parameters for querying log entries.
 type QueryFilter struct {
 	Limit      int

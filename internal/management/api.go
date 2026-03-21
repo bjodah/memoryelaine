@@ -13,17 +13,6 @@ import (
 	"memoryelaine/internal/streamview"
 )
 
-type logDetailResponse struct {
-	Entry      *database.LogEntry `json:"entry"`
-	StreamView streamViewResponse `json:"stream_view"`
-}
-
-type streamViewResponse struct {
-	AssembledBody      string `json:"assembled_body,omitempty"`
-	AssembledAvailable bool   `json:"assembled_available"`
-	Reason             string `json:"reason"`
-}
-
 type recordingStateResponse struct {
 	Recording bool `json:"recording"`
 }
@@ -64,20 +53,44 @@ func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
 			filter.Search = &v
 		}
 
-		entries, err := reader.Query(filter)
+		summaries, err := reader.QuerySummaries(filter)
 		if err != nil {
-			http.Error(w, "query error: "+err.Error(), http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "query_error", err.Error())
 			return
 		}
 		total, err := reader.Count(filter)
 		if err != nil {
-			http.Error(w, "count error: "+err.Error(), http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "count_error", err.Error())
 			return
 		}
 
-		resp := map[string]interface{}{
-			"data":  entries,
-			"total": total,
+		data := make([]LogSummary, len(summaries))
+		for i, s := range summaries {
+			data[i] = LogSummary{
+				ID:              s.ID,
+				TsStart:         s.TsStart,
+				TsEnd:           s.TsEnd,
+				DurationMs:      s.DurationMs,
+				ClientIP:        s.ClientIP,
+				RequestMethod:   s.RequestMethod,
+				RequestPath:     s.RequestPath,
+				StatusCode:      s.StatusCode,
+				ReqBytes:        s.ReqBytes,
+				RespBytes:       s.RespBytes,
+				ReqTruncated:    s.ReqTruncated,
+				RespTruncated:   s.RespTruncated,
+				HasRequestBody:  s.ReqBodyLen > 0,
+				HasResponseBody: s.RespBodyLen > 0,
+				Error:           s.Error,
+			}
+		}
+
+		resp := LogListResponse{
+			Data:    data,
+			Total:   total,
+			Limit:   filter.Limit,
+			Offset:  filter.Offset,
+			HasMore: int64(filter.Offset+filter.Limit) < total,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -92,26 +105,50 @@ func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
 		// Extract ID from path: /api/logs/{id}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/logs/"), "/")
 		if len(parts) == 0 || parts[0] == "" {
-			http.Error(w, "missing id", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
 			return
 		}
 		id, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
 			return
 		}
 
 		entry, err := reader.GetByID(id)
 		if err != nil {
-			http.Error(w, "not found", http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
 			return
 		}
 
+		reqHeaders := decodeHeaders(entry.ReqHeadersJSON)
+		respHeaders := decodeHeaders(derefStr(entry.RespHeadersJSON))
+
 		sv := streamview.Build(entry)
-		resp := logDetailResponse{
-			Entry: entry,
-			StreamView: streamViewResponse{
-				AssembledBody:      sv.AssembledBody,
+
+		detail := LogDetailEntry{
+			ID:              entry.ID,
+			TsStart:         entry.TsStart,
+			TsEnd:           entry.TsEnd,
+			DurationMs:      entry.DurationMs,
+			ClientIP:        entry.ClientIP,
+			RequestMethod:   entry.RequestMethod,
+			RequestPath:     entry.RequestPath,
+			UpstreamURL:     entry.UpstreamURL,
+			StatusCode:      entry.StatusCode,
+			ReqBytes:        entry.ReqBytes,
+			RespBytes:       entry.RespBytes,
+			ReqTruncated:    entry.ReqTruncated,
+			RespTruncated:   entry.RespTruncated,
+			HasRequestBody:  len(entry.ReqBody) > 0,
+			HasResponseBody: entry.RespBody != nil && len(*entry.RespBody) > 0,
+			Error:           entry.Error,
+			ReqHeaders:      reqHeaders,
+			RespHeaders:     respHeaders,
+		}
+
+		resp := LogDetailResponse{
+			Entry: detail,
+			StreamView: StreamViewResponse{
 				AssembledAvailable: sv.AssembledAvailable,
 				Reason:             string(sv.Reason),
 			},
@@ -119,7 +156,7 @@ func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			slog.Error("encoding log entry response", "id", id, "error", err)
+			slog.Error("encoding log detail response", "id", id, "error", err)
 		}
 	}
 }
@@ -207,4 +244,30 @@ func writeTextBody(w http.ResponseWriter, body string, stale bool) {
 	if _, err := w.Write([]byte(body)); err != nil {
 		slog.Error("writing plain-text response", "error", err)
 	}
+}
+
+func writeAPIError(w http.ResponseWriter, status int, errCode, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(APIError{Error: errCode, Message: message}); err != nil {
+		slog.Error("encoding error response", "error", err)
+	}
+}
+
+func decodeHeaders(raw string) map[string][]string {
+	if raw == "" {
+		return nil
+	}
+	var h map[string][]string
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		return nil
+	}
+	return h
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

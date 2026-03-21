@@ -251,7 +251,6 @@ func TestAPILogByID_WrappedResponseShape(t *testing.T) {
 	var result struct {
 		Entry      json.RawMessage `json:"entry"`
 		StreamView struct {
-			AssembledBody      string `json:"assembled_body"`
 			AssembledAvailable bool   `json:"assembled_available"`
 			Reason             string `json:"reason"`
 		} `json:"stream_view"`
@@ -264,9 +263,6 @@ func TestAPILogByID_WrappedResponseShape(t *testing.T) {
 	}
 	if !result.StreamView.AssembledAvailable {
 		t.Errorf("expected assembled_available=true, got false (reason=%s)", result.StreamView.Reason)
-	}
-	if result.StreamView.AssembledBody != "Hello" {
-		t.Errorf("expected assembled_body %q, got %q", "Hello", result.StreamView.AssembledBody)
 	}
 	if result.StreamView.Reason != "supported" {
 		t.Errorf("expected reason %q, got %q", "supported", result.StreamView.Reason)
