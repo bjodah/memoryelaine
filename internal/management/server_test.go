@@ -55,6 +55,7 @@ func setupTestDeps(t *testing.T) ServerDeps {
 			Username: "admin",
 			Password: "test123",
 		},
+		PreviewBytes: 65536,
 	}
 }
 

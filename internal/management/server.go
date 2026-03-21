@@ -17,6 +17,7 @@ type ServerDeps struct {
 	LogWriter      *database.LogWriter
 	RecordingState *recording.State
 	Auth           config.AuthConfig
+	PreviewBytes   int
 }
 
 // NewMux builds the http.ServeMux for the management port.
@@ -28,8 +29,12 @@ func NewMux(deps ServerDeps) http.Handler {
 
 	// Everything else requires basic auth
 	mux.Handle("/metrics", basicAuth(metricsHandler(), deps.Auth.Username, deps.Auth.Password))
+	previewBytes := deps.PreviewBytes
+	if previewBytes <= 0 {
+		previewBytes = 65536
+	}
 	mux.Handle("/api/logs", basicAuth(apiLogsHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
-	mux.Handle("/api/logs/", basicAuth(apiLogByIDHandler(deps.Reader), deps.Auth.Username, deps.Auth.Password))
+	mux.Handle("/api/logs/", basicAuth(apiLogSubHandler(deps.Reader, previewBytes), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/api/recording", basicAuth(apiRecordingHandler(deps.RecordingState), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/last-request", basicAuth(lastRequestHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))
 	mux.Handle("/last-response", basicAuth(lastResponseHandler(deps.Reader, deps.LogWriter), deps.Auth.Username, deps.Auth.Password))

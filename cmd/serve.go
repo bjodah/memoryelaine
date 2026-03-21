@@ -120,6 +120,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		LogWriter:      logWriter,
 		RecordingState: recordingState,
 		Auth:           cfg.Management.Auth,
+		PreviewBytes:   cfg.Management.PreviewBytes,
 	})
 
 	// 10. Start proxy server

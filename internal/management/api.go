@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/query"
 	"memoryelaine/internal/recording"
 	"memoryelaine/internal/streamview"
 )
@@ -31,34 +32,53 @@ func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
 				filter.Offset = n
 			}
 		}
-		if v := r.URL.Query().Get("status"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				filter.StatusCode = &n
+
+		var extraWhere string
+		var extraArgs []interface{}
+
+		if q := r.URL.Query().Get("query"); q != "" {
+			// Use the query DSL parser
+			terms, err := query.Parse(q)
+			if err != nil {
+				if pe, ok := err.(*query.ParseError); ok {
+					writeAPIError(w, http.StatusBadRequest, "query_parse_error", pe.Message)
+					return
+				}
+				writeAPIError(w, http.StatusBadRequest, "query_parse_error", err.Error())
+				return
 			}
-		}
-		if v := r.URL.Query().Get("path"); v != "" {
-			filter.Path = &v
-		}
-		if v := r.URL.Query().Get("since"); v != "" {
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-				filter.Since = &n
+			extraWhere, extraArgs = query.ToSQL(terms)
+		} else {
+			// Backward compat: support old individual filter params
+			if v := r.URL.Query().Get("status"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil {
+					filter.StatusCode = &n
+				}
 			}
-		}
-		if v := r.URL.Query().Get("until"); v != "" {
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-				filter.Until = &n
+			if v := r.URL.Query().Get("path"); v != "" {
+				filter.Path = &v
 			}
-		}
-		if v := r.URL.Query().Get("q"); v != "" {
-			filter.Search = &v
+			if v := r.URL.Query().Get("since"); v != "" {
+				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+					filter.Since = &n
+				}
+			}
+			if v := r.URL.Query().Get("until"); v != "" {
+				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+					filter.Until = &n
+				}
+			}
+			if v := r.URL.Query().Get("q"); v != "" {
+				filter.Search = &v
+			}
 		}
 
-		summaries, err := reader.QuerySummaries(filter)
+		summaries, err := reader.QuerySummariesRaw(filter, extraWhere, extraArgs)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "query_error", err.Error())
 			return
 		}
-		total, err := reader.Count(filter)
+		total, err := reader.CountRaw(filter, extraWhere, extraArgs)
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "count_error", err.Error())
 			return
@@ -100,64 +120,179 @@ func apiLogsHandler(reader *database.LogReader) http.HandlerFunc {
 	}
 }
 
-func apiLogByIDHandler(reader *database.LogReader) http.HandlerFunc {
+func apiLogSubHandler(reader *database.LogReader, previewBytes int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Extract ID from path: /api/logs/{id}
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/logs/"), "/")
-		if len(parts) == 0 || parts[0] == "" {
-			writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
+		path := strings.TrimPrefix(r.URL.Path, "/api/logs/")
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 && parts[1] == "body" {
+			handleBody(w, r, reader, previewBytes, parts[0])
 			return
 		}
-		id, err := strconv.ParseInt(parts[0], 10, 64)
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
-			return
+		handleDetail(w, r, reader, parts[0])
+	}
+}
+
+func handleDetail(w http.ResponseWriter, r *http.Request, reader *database.LogReader, idStr string) {
+	if idStr == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
+		return
+	}
+
+	entry, err := reader.GetByID(id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
+		return
+	}
+
+	reqHeaders := decodeHeaders(entry.ReqHeadersJSON)
+	respHeaders := decodeHeaders(derefStr(entry.RespHeadersJSON))
+
+	sv := streamview.Build(entry)
+
+	detail := LogDetailEntry{
+		ID:              entry.ID,
+		TsStart:         entry.TsStart,
+		TsEnd:           entry.TsEnd,
+		DurationMs:      entry.DurationMs,
+		ClientIP:        entry.ClientIP,
+		RequestMethod:   entry.RequestMethod,
+		RequestPath:     entry.RequestPath,
+		UpstreamURL:     entry.UpstreamURL,
+		StatusCode:      entry.StatusCode,
+		ReqBytes:        entry.ReqBytes,
+		RespBytes:       entry.RespBytes,
+		ReqTruncated:    entry.ReqTruncated,
+		RespTruncated:   entry.RespTruncated,
+		HasRequestBody:  len(entry.ReqBody) > 0,
+		HasResponseBody: entry.RespBody != nil && len(*entry.RespBody) > 0,
+		Error:           entry.Error,
+		ReqHeaders:      reqHeaders,
+		RespHeaders:     respHeaders,
+	}
+
+	resp := LogDetailResponse{
+		Entry: detail,
+		StreamView: StreamViewResponse{
+			AssembledAvailable: sv.AssembledAvailable,
+			Reason:             string(sv.Reason),
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("encoding log detail response", "id", id, "error", err)
+	}
+}
+
+func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogReader, previewBytes int, idStr string) {
+	if idStr == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
+		return
+	}
+
+	part := r.URL.Query().Get("part")
+	if part == "" {
+		part = "resp"
+	}
+	if part != "req" && part != "resp" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_part", "part must be 'req' or 'resp'")
+		return
+	}
+
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "raw"
+	}
+	if mode != "raw" && mode != "assembled" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_mode", "mode must be 'raw' or 'assembled'")
+		return
+	}
+
+	if part == "req" && mode == "assembled" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_combination", "assembled mode is not available for request bodies")
+		return
+	}
+
+	fullParam := r.URL.Query().Get("full")
+	full := fullParam == "true" || fullParam == "1"
+
+	entry, err := reader.GetByID(id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
+		return
+	}
+
+	var resp BodyResponse
+	resp.Part = part
+	resp.Mode = mode
+	resp.Full = full
+
+	switch {
+	case part == "req":
+		resp.TotalBytes = entry.ReqBytes
+		body := entry.ReqBody
+		if body == "" {
+			resp.Available = false
+			resp.Reason = "no request body"
+		} else {
+			resp.Available = true
+			content := body
+			if !full && len(content) > previewBytes {
+				content = content[:previewBytes]
+				resp.Truncated = true
+			}
+			resp.Content = content
+			resp.IncludedBytes = len(content)
 		}
 
-		entry, err := reader.GetByID(id)
-		if err != nil {
-			writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
-			return
+	case part == "resp" && mode == "raw":
+		resp.TotalBytes = entry.RespBytes
+		if entry.RespBody == nil || *entry.RespBody == "" {
+			resp.Available = false
+			resp.Reason = "no response body"
+		} else {
+			resp.Available = true
+			content := *entry.RespBody
+			if !full && len(content) > previewBytes {
+				content = content[:previewBytes]
+				resp.Truncated = true
+			}
+			resp.Content = content
+			resp.IncludedBytes = len(content)
 		}
 
-		reqHeaders := decodeHeaders(entry.ReqHeadersJSON)
-		respHeaders := decodeHeaders(derefStr(entry.RespHeadersJSON))
-
+	case part == "resp" && mode == "assembled":
+		resp.TotalBytes = entry.RespBytes
 		sv := streamview.Build(entry)
-
-		detail := LogDetailEntry{
-			ID:              entry.ID,
-			TsStart:         entry.TsStart,
-			TsEnd:           entry.TsEnd,
-			DurationMs:      entry.DurationMs,
-			ClientIP:        entry.ClientIP,
-			RequestMethod:   entry.RequestMethod,
-			RequestPath:     entry.RequestPath,
-			UpstreamURL:     entry.UpstreamURL,
-			StatusCode:      entry.StatusCode,
-			ReqBytes:        entry.ReqBytes,
-			RespBytes:       entry.RespBytes,
-			ReqTruncated:    entry.ReqTruncated,
-			RespTruncated:   entry.RespTruncated,
-			HasRequestBody:  len(entry.ReqBody) > 0,
-			HasResponseBody: entry.RespBody != nil && len(*entry.RespBody) > 0,
-			Error:           entry.Error,
-			ReqHeaders:      reqHeaders,
-			RespHeaders:     respHeaders,
+		if !sv.AssembledAvailable {
+			resp.Available = false
+			resp.Reason = string(sv.Reason)
+		} else {
+			resp.Available = true
+			content := sv.AssembledBody
+			if !full && len(content) > previewBytes {
+				content = content[:previewBytes]
+				resp.Truncated = true
+			}
+			resp.Content = content
+			resp.IncludedBytes = len(content)
+			resp.TotalBytes = int64(len(sv.AssembledBody))
 		}
+	}
 
-		resp := LogDetailResponse{
-			Entry: detail,
-			StreamView: StreamViewResponse{
-				AssembledAvailable: sv.AssembledAvailable,
-				Reason:             string(sv.Reason),
-			},
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			slog.Error("encoding log detail response", "id", id, "error", err)
-		}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("encoding body response", "id", id, "error", err)
 	}
 }
 

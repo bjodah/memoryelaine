@@ -181,6 +181,83 @@ func (r *LogReader) QuerySummaries(filter QueryFilter) ([]LogSummary, error) {
 	return summaries, nil
 }
 
+// QuerySummariesRaw returns lightweight summaries with an additional raw WHERE clause.
+// The extraWhere should NOT include the "WHERE" keyword — it will be ANDed with
+// any conditions from the filter.
+func (r *LogReader) QuerySummariesRaw(filter QueryFilter, extraWhere string, extraArgs []interface{}) ([]LogSummary, error) {
+	where, args := buildWhere(filter)
+	if extraWhere != "" {
+		if where == "" {
+			where = "WHERE " + extraWhere
+		} else {
+			where += " AND " + extraWhere
+		}
+		args = append(args, extraArgs...)
+	}
+	order := "DESC"
+	if !filter.OrderDesc {
+		order = "ASC"
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, status_code, req_bytes, resp_bytes, req_truncated, resp_truncated, COALESCE(LENGTH(req_body), 0) AS req_body_len, COALESCE(LENGTH(resp_body), 0) AS resp_body_len, error FROM openai_logs %s ORDER BY ts_start %s LIMIT ? OFFSET ?`,
+		where, order,
+	)
+	args = append(args, limit, filter.Offset)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying log summaries: %w", err)
+	}
+
+	var summaries []LogSummary
+	for rows.Next() {
+		var s LogSummary
+		if err := rows.Scan(
+			&s.ID, &s.TsStart, &s.TsEnd, &s.DurationMs, &s.ClientIP,
+			&s.RequestMethod, &s.RequestPath, &s.StatusCode,
+			&s.ReqBytes, &s.RespBytes, &s.ReqTruncated, &s.RespTruncated,
+			&s.ReqBodyLen, &s.RespBodyLen,
+			&s.Error,
+		); err != nil {
+			return nil, fmt.Errorf("scanning log summary: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, fmt.Errorf("iterating log summaries: %w (close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("iterating log summaries: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing log summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+// CountRaw returns total rows with an additional raw WHERE clause.
+// The extraWhere should NOT include the "WHERE" keyword.
+func (r *LogReader) CountRaw(filter QueryFilter, extraWhere string, extraArgs []interface{}) (int64, error) {
+	where, args := buildWhere(filter)
+	if extraWhere != "" {
+		if where == "" {
+			where = "WHERE " + extraWhere
+		} else {
+			where += " AND " + extraWhere
+		}
+		args = append(args, extraArgs...)
+	}
+	query := fmt.Sprintf("SELECT COUNT(*) FROM openai_logs %s", where)
+	var count int64
+	err := r.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
 func buildWhere(f QueryFilter) (string, []interface{}) {
 	var conds []string
 	var args []interface{}
