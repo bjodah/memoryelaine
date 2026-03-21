@@ -5,7 +5,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w \
+RUN CGO_ENABLED=1 GOOS=linux go build -tags sqlite_fts5 -ldflags="-s -w \
     -X memoryelaine/internal/version.Version=$(git describe --tags --always 2>/dev/null || echo dev) \
     -X memoryelaine/internal/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o /memoryelaine .

@@ -188,3 +188,89 @@ func TestReaderQuery_SearchFilter(t *testing.T) {
 		t.Errorf("expected 5 (all match resp_body), got %d", len(entries))
 	}
 }
+
+func TestReaderQuery_FTSSearch(t *testing.T) {
+	db := setupTestDB(t)
+	defer mustClose(t, db)
+
+	stmt, err := db.Prepare(insertSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, stmt)
+
+	now := time.Now().UnixMilli()
+	code := 200
+
+	// Entry 1: req_body contains "unicorn"
+	if _, err := stmt.Exec(
+		now, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"prompt":"tell me about unicorn"}`, false, 30,
+		`{"text":"response one"}`, false, 20,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry 2: resp_body contains "dragon"
+	if _, err := stmt.Exec(
+		now+1, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"prompt":"something else"}`, false, 25,
+		`{"text":"here be dragon"}`, false, 22,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry 3: neither contains the search terms
+	if _, err := stmt.Exec(
+		now+2, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"prompt":"boring"}`, false, 18,
+		`{"text":"nothing special"}`, false, 24,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewLogReader(db)
+
+	// Search for "unicorn" — should match only entry 1
+	search := "unicorn"
+	f := DefaultQueryFilter()
+	f.Search = &search
+	entries, err := r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("search 'unicorn': expected 1 result, got %d", len(entries))
+	}
+
+	// Search for "dragon" — should match only entry 2
+	search = "dragon"
+	f.Search = &search
+	entries, err = r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("search 'dragon': expected 1 result, got %d", len(entries))
+	}
+
+	// Search for a term not present — should return 0 results
+	search = "nonexistent"
+	f.Search = &search
+	entries, err = r.Query(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("search 'nonexistent': expected 0 results, got %d", len(entries))
+	}
+}

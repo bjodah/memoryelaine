@@ -202,9 +202,8 @@ func buildWhere(f QueryFilter) (string, []interface{}) {
 		args = append(args, *f.Until)
 	}
 	if f.Search != nil {
-		conds = append(conds, "(req_body LIKE ? OR resp_body LIKE ?)")
-		pattern := "%" + *f.Search + "%"
-		args = append(args, pattern, pattern)
+		conds = append(conds, "id IN (SELECT rowid FROM openai_logs_fts WHERE openai_logs_fts MATCH ?)")
+		args = append(args, *f.Search)
 	}
 
 	if len(conds) == 0 {
