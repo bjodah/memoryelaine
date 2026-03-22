@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Async HTTP layer built on curl.  Each request gets a generation counter
-;; to suppress stale responses.  Provides structured response parsing and
+;; Async HTTP layer built on curl.  Provides structured response parsing and
 ;; error handling with friendly messages for common curl exit codes.
+;; Staleness tracking is the caller's responsibility.
 
 ;;; Code:
 
@@ -12,15 +12,8 @@
 (require 'memoryelaine-log)
 (require 'memoryelaine-auth)
 
-(defvar memoryelaine-http--generation 0
-  "Monotonically increasing request generation counter.")
-
 (defvar memoryelaine-http--active-processes nil
   "List of active curl process objects.")
-
-(defun memoryelaine-http--next-generation ()
-  "Increment and return the next generation number."
-  (setq memoryelaine-http--generation (1+ memoryelaine-http--generation)))
 
 (defun memoryelaine-http--curl-error-message (exit-code)
   "Return a friendly error message for curl EXIT-CODE."
@@ -93,16 +86,14 @@ PATH is the API path (e.g., \"/api/logs\").
 PARAMS is an alist of query parameters or nil.
 CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING).
 
-Returns the generation number for this request.
-Stale responses (where generation has advanced) are silently dropped."
-  (let* ((generation (memoryelaine-http--next-generation))
-         (url (memoryelaine-http--build-url path params))
+Returns the process object for this request."
+  (let* ((url (memoryelaine-http--build-url path params))
          (args (memoryelaine-http--build-curl-args url method))
          (buf (generate-new-buffer " *memoryelaine-curl*"))
          (curl-program (symbol-value 'memoryelaine-curl-program))
          (proc (apply #'start-process
                       "memoryelaine-curl" buf curl-program args)))
-    (memoryelaine-log-debug "HTTP %s %s (gen=%d)" method url generation)
+    (memoryelaine-log-debug "HTTP %s %s" method url)
     (push proc memoryelaine-http--active-processes)
     (set-process-sentinel
      proc
@@ -110,32 +101,25 @@ Stale responses (where generation has advanced) are silently dropped."
        (setq memoryelaine-http--active-processes
              (delq process memoryelaine-http--active-processes))
        (let ((exit-code (process-exit-status process)))
-         (if (< generation memoryelaine-http--generation)
-             ;; Stale — generation has advanced, discard
-             (progn
-               (memoryelaine-log-debug "Discarding stale response (gen=%d, current=%d)"
-                                       generation memoryelaine-http--generation)
-               (kill-buffer (process-buffer process)))
-           ;; Current — process the response
-           (unwind-protect
-               (if (not (zerop exit-code))
-                   (let ((err-msg (memoryelaine-http--curl-error-message exit-code)))
-                     (memoryelaine-log-error "curl error: %s (exit=%d)" err-msg exit-code)
-                     (funcall callback 0 nil err-msg))
-                 (let* ((output (with-current-buffer (process-buffer process)
-                                  (buffer-string)))
-                        (parsed (memoryelaine-http--parse-response output))
-                        (status (car parsed))
-                        (body (cdr parsed)))
-                   (if (= status 401)
-                       (progn
-                         (memoryelaine-auth-on-401)
-                         (funcall callback 401 nil "Authentication failed"))
-                     (let ((json-data (memoryelaine-http--parse-json body)))
-                       (funcall callback status json-data nil)))))
-             (when (buffer-live-p (process-buffer process))
-               (kill-buffer (process-buffer process))))))))
-    generation))
+         (unwind-protect
+             (if (not (zerop exit-code))
+                 (let ((err-msg (memoryelaine-http--curl-error-message exit-code)))
+                   (memoryelaine-log-error "curl error: %s (exit=%d)" err-msg exit-code)
+                   (funcall callback 0 nil err-msg))
+               (let* ((output (with-current-buffer (process-buffer process)
+                                (buffer-string)))
+                      (parsed (memoryelaine-http--parse-response output))
+                      (status (car parsed))
+                      (body (cdr parsed)))
+                 (if (= status 401)
+                     (progn
+                       (memoryelaine-auth-on-401)
+                       (funcall callback 401 nil "Authentication failed"))
+                   (let ((json-data (memoryelaine-http--parse-json body)))
+                     (funcall callback status json-data nil)))))
+           (when (buffer-live-p (process-buffer process))
+             (kill-buffer (process-buffer process)))))))
+    proc))
 
 (defun memoryelaine-http-get (path params callback)
   "Convenience wrapper for GET requests.
@@ -146,9 +130,10 @@ PATH, PARAMS, and CALLBACK as in `memoryelaine-http-request'."
   "Make an async PUT request with a JSON body.
 PATH, PARAMS as in `memoryelaine-http-request'.
 BODY-ALIST is encoded as JSON.
-CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING)."
-  (let* ((generation (memoryelaine-http--next-generation))
-         (url (memoryelaine-http--build-url path params))
+CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING).
+
+Returns the process object for this request."
+  (let* ((url (memoryelaine-http--build-url path params))
          (creds (memoryelaine-auth-get-credentials))
          (auth-header (format "Authorization: Basic %s"
                               (base64-encode-string
@@ -168,7 +153,7 @@ CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING)."
                 "--write-out" "\n__MEMORYELAINE_HTTP_STATUS__:%{http_code}"
                 "-d" json-body
                 url)))
-    (memoryelaine-log-debug "HTTP PUT %s (gen=%d)" url generation)
+    (memoryelaine-log-debug "HTTP PUT %s" url)
     (push proc memoryelaine-http--active-processes)
     (set-process-sentinel
      proc
@@ -176,31 +161,34 @@ CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING)."
        (setq memoryelaine-http--active-processes
              (delq process memoryelaine-http--active-processes))
        (let ((exit-code (process-exit-status process)))
-         (if (< generation memoryelaine-http--generation)
-             (progn
-               (memoryelaine-log-debug "Discarding stale PUT response (gen=%d)" generation)
-               (kill-buffer (process-buffer process)))
-           (unwind-protect
-               (if (not (zerop exit-code))
-                   (let ((err-msg (memoryelaine-http--curl-error-message exit-code)))
-                     (memoryelaine-log-error "curl error: %s (exit=%d)" err-msg exit-code)
-                     (funcall callback 0 nil err-msg))
-                 (let* ((output (with-current-buffer (process-buffer process)
-                                  (buffer-string)))
-                        (parsed (memoryelaine-http--parse-response output))
-                        (status (car parsed))
-                        (body (cdr parsed))
-                        (json-data (memoryelaine-http--parse-json body)))
-                   (funcall callback status json-data nil)))
-             (when (buffer-live-p (process-buffer process))
-               (kill-buffer (process-buffer process))))))))
-    generation))
+         (unwind-protect
+             (if (not (zerop exit-code))
+                 (let ((err-msg (memoryelaine-http--curl-error-message exit-code)))
+                   (memoryelaine-log-error "curl error: %s (exit=%d)" err-msg exit-code)
+                   (funcall callback 0 nil err-msg))
+               (let* ((output (with-current-buffer (process-buffer process)
+                                (buffer-string)))
+                      (parsed (memoryelaine-http--parse-response output))
+                      (status (car parsed))
+                      (body (cdr parsed)))
+                 (if (= status 401)
+                     (progn
+                       (memoryelaine-auth-on-401)
+                       (funcall callback 401 nil "Authentication failed"))
+                   (let ((json-data (memoryelaine-http--parse-json body)))
+                     (funcall callback status json-data nil)))))
+           (when (buffer-live-p (process-buffer process))
+             (kill-buffer (process-buffer process)))))))
+    proc))
 
 (defun memoryelaine-http-cancel-all ()
-  "Cancel all active HTTP requests."
+  "Cancel all active HTTP requests and clean up their buffers."
   (dolist (proc memoryelaine-http--active-processes)
     (when (process-live-p proc)
-      (delete-process proc)))
+      (let ((buf (process-buffer proc)))
+        (delete-process proc)
+        (when (buffer-live-p buf)
+          (kill-buffer buf)))))
   (setq memoryelaine-http--active-processes nil)
   (memoryelaine-log-debug "Cancelled all active requests"))
 

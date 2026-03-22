@@ -274,3 +274,34 @@ func TestReaderQuery_FTSSearch(t *testing.T) {
 		t.Errorf("search 'nonexistent': expected 0 results, got %d", len(entries))
 	}
 }
+
+func TestReaderQuery_FTSSpecialChars(t *testing.T) {
+	db := setupTestDB(t)
+	reader := NewLogReader(db)
+
+	// Insert a test entry with all required non-null fields
+	_, err := db.Exec(`INSERT INTO openai_logs (ts_start,client_ip,request_method,request_path,upstream_url,req_headers_json,req_body,req_bytes,resp_bytes)
+		VALUES (?,?,?,?,?,?,?,?,?)`, 1000, "127.0.0.1", "POST", "/v1/chat/completions", "http://api.openai.com/v1/chat/completions", "{}", `{"prompt":"test"}`, 18, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// These inputs would cause FTS5 syntax errors without sanitization
+	problematic := []string{
+		`he said "hello`,
+		`test*wildcard`,
+		`(parentheses)`,
+		`a^b`,
+		`OR`,
+		`"unterminated`,
+	}
+	for _, q := range problematic {
+		filter := DefaultQueryFilter()
+		filter.Search = &q
+		// Should not panic or error — may return 0 results, that's fine
+		_, err := reader.Query(filter)
+		if err != nil {
+			t.Errorf("FTS query with %q should not error, got: %v", q, err)
+		}
+	}
+}

@@ -437,3 +437,40 @@ func TestToSQL_ParameterCountMatchesPlaceholders(t *testing.T) {
 		t.Errorf("placeholder count %d != args count %d\nwhere: %s\nargs: %v", qCount, len(args), where, args)
 	}
 }
+
+func TestSanitizeFTS5Token(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{`hello`, `hello`},
+		{`he said "hello`, `he said hello`},
+		{`test*`, `test`},
+		{`(group)`, `group`},
+		{`OR`, ``},
+		{`AND`, ``},
+		{`NOT`, ``},
+		{`NEAR`, ``},
+		{`normal`, `normal`},
+		{`he^llo`, `hello`},
+	}
+	for _, tt := range tests {
+		got := sanitizeFTS5Token(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeFTS5Token(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestBuildFTSMatch_Sanitization(t *testing.T) {
+	// Unmatched quotes should be stripped, not cause FTS5 errors
+	result := buildFTSMatch([]string{`he said "hello`})
+	if strings.Contains(result, `"`) && strings.Count(result, `"`)%2 != 0 {
+		t.Errorf("buildFTSMatch produced unbalanced quotes: %q", result)
+	}
+	// FTS5 keywords as search terms should be dropped
+	result2 := buildFTSMatch([]string{"OR", "hello"})
+	if strings.Contains(result2, "OR") {
+		t.Errorf("buildFTSMatch should drop FTS5 keyword OR: %q", result2)
+	}
+}

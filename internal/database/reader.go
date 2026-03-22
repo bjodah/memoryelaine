@@ -279,12 +279,36 @@ func buildWhere(f QueryFilter) (string, []interface{}) {
 		args = append(args, *f.Until)
 	}
 	if f.Search != nil {
-		conds = append(conds, "id IN (SELECT rowid FROM openai_logs_fts WHERE openai_logs_fts MATCH ?)")
-		args = append(args, *f.Search)
+		sanitized := sanitizeFTS5Input(*f.Search)
+		if sanitized != "" {
+			conds = append(conds, "id IN (SELECT rowid FROM openai_logs_fts WHERE openai_logs_fts MATCH ?)")
+			args = append(args, sanitized)
+		}
 	}
 
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return "WHERE " + strings.Join(conds, " AND "), args
+}
+
+// sanitizeFTS5Input strips characters that have special meaning in FTS5
+// query syntax to prevent malformed MATCH expressions from user input.
+func sanitizeFTS5Input(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '"', '*', '^', '(', ')', '{', '}', '+':
+			// skip FTS5 control characters
+		default:
+			b.WriteRune(r)
+		}
+	}
+	result := strings.TrimSpace(b.String())
+	upper := strings.ToUpper(result)
+	if upper == "OR" || upper == "AND" || upper == "NOT" || upper == "NEAR" {
+		return ""
+	}
+	return result
 }

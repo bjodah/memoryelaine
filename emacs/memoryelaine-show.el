@@ -25,7 +25,8 @@
 
 (define-derived-mode memoryelaine-show-mode special-mode "MemoryElaine-Show"
   "Major mode for viewing a single memoryelaine log entry."
-  (setq buffer-read-only t))
+  (setq buffer-read-only t)
+  (add-hook 'kill-buffer-hook #'memoryelaine-http-cancel-all nil t))
 
 ;; --- Entry point ---
 
@@ -191,6 +192,20 @@ FULL is non-nil to fetch the complete body."
                             (mapconcat (lambda (v) (format "%s" v)) val ", ")
                           (format "%s" val))))))))
 
+(defun memoryelaine-show--maybe-pretty-print-json (content)
+  "Attempt to pretty-print CONTENT as JSON. Return formatted string or original."
+  (if (and content
+           (> (length content) 0)
+           (memq (aref content 0) '(?\{ ?\[)))
+      (condition-case nil
+          (let ((parsed (json-parse-string content :object-type 'alist :array-type 'list)))
+            (with-temp-buffer
+              (insert (json-serialize parsed))
+              (json-pretty-print-buffer)
+              (buffer-string)))
+        (error content))
+    content))
+
 (defun memoryelaine-show--insert-body (part)
   "Insert body content for PART (\"req\" or \"resp\").
 Shows preview/full content with size info, or a placeholder."
@@ -220,7 +235,7 @@ Shows preview/full content with size info, or a placeholder."
                            (memoryelaine-show--format-bytes included)
                            (memoryelaine-show--format-bytes total))
                    'face 'warning)))
-        (insert body)
+        (insert (memoryelaine-show--maybe-pretty-print-json body))
         (unless (string-suffix-p "\n" body)
           (insert "\n"))))
      (t
@@ -259,7 +274,11 @@ Shows preview/full content with size info, or a placeholder."
       (when (and entry (alist-get 'has_request_body entry))
         (memoryelaine-show--fetch-body memoryelaine-state--entry-id "req" "raw" t))
       (when (and entry (alist-get 'has_response_body entry))
-        (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "raw" t)))))
+        (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "raw" t)
+        ;; Also fetch full assembled body if available
+        (when (and memoryelaine-state--stream-view
+                   (alist-get 'assembled_available memoryelaine-state--stream-view))
+          (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "assembled" t))))))
 
 ;; --- Formatting helpers ---
 

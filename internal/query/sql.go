@@ -85,16 +85,44 @@ func ToSQL(terms []Term) (where string, args []interface{}) {
 	return where, args
 }
 
+// sanitizeFTS5Token strips or escapes characters that have special meaning
+// in FTS5 query syntax to prevent malformed MATCH expressions.
+func sanitizeFTS5Token(s string) string {
+	// Remove characters that are FTS5 operators/syntax
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '"', '*', '^', '(', ')', '{', '}', '+':
+			// skip FTS5 control characters
+		default:
+			b.WriteRune(r)
+		}
+	}
+	result := b.String()
+	// Strip FTS5 boolean keywords when they appear as standalone tokens
+	upper := strings.ToUpper(strings.TrimSpace(result))
+	if upper == "OR" || upper == "AND" || upper == "NOT" || upper == "NEAR" {
+		return ""
+	}
+	return result
+}
+
 // buildFTSMatch creates the FTS5 MATCH expression. Multiple terms are
 // space-separated which FTS5 treats as implicit AND. Phrases containing
-// spaces are wrapped in double quotes for FTS5.
+// spaces are wrapped in double quotes for FTS5. All tokens are sanitized
+// to prevent FTS5 syntax errors from user input.
 func buildFTSMatch(texts []string) string {
 	parts := make([]string, 0, len(texts))
 	for _, t := range texts {
-		if strings.ContainsAny(t, " \t") {
-			parts = append(parts, fmt.Sprintf(`"%s"`, t))
+		sanitized := sanitizeFTS5Token(t)
+		if sanitized == "" {
+			continue
+		}
+		if strings.ContainsAny(sanitized, " \t") {
+			parts = append(parts, fmt.Sprintf(`"%s"`, sanitized))
 		} else {
-			parts = append(parts, t)
+			parts = append(parts, sanitized)
 		}
 	}
 	return strings.Join(parts, " ")

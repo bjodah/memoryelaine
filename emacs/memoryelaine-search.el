@@ -64,7 +64,8 @@
       (setq memoryelaine-state--limit
             (symbol-value 'memoryelaine-page-size))
       (memoryelaine-state-set-query query)
-      (memoryelaine-search--fetch))
+      (memoryelaine-search--fetch)
+      (memoryelaine-search--fetch-recording-state))
     (pop-to-buffer-same-window buf)))
 
 ;; --- Data fetching ---

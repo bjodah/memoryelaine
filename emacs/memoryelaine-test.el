@@ -126,12 +126,16 @@
   (should (string-match-p "timed out" (memoryelaine-http--curl-error-message 28)))
   (should (string-match-p "exit code 99" (memoryelaine-http--curl-error-message 99))))
 
-(ert-deftest memoryelaine-test-http-generation-counter ()
-  "Test that generation counter increments."
-  (let ((memoryelaine-http--generation 0))
-    (should (= (memoryelaine-http--next-generation) 1))
-    (should (= (memoryelaine-http--next-generation) 2))
-    (should (= memoryelaine-http--generation 2))))
+(ert-deftest memoryelaine-test-http-request-returns-process ()
+  "Test that memoryelaine-http-request returns a process object."
+  (let ((memoryelaine-base-url "http://localhost:9999")
+        (memoryelaine-curl-program "curl")
+        (memoryelaine--cached-credentials '("user" . "pass")))
+    (let ((result (memoryelaine-http-request "GET" "/api/test" nil #'ignore)))
+      (unwind-protect
+          (should (processp result))
+        (when (processp result)
+          (delete-process result))))))
 
 ;;; --- State tests ---
 
