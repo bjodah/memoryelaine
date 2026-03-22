@@ -72,12 +72,14 @@ Expects the output to end with __MEMORYELAINE_HTTP_STATUS__:NNN."
       (cons 0 output))))
 
 (defun memoryelaine-http--parse-json (body)
-  "Parse BODY as JSON, returning a plist or nil on error."
-  (condition-case err
-      (json-parse-string body :object-type 'alist :array-type 'list)
-    (error
-     (memoryelaine-log-error "JSON parse error: %s" (error-message-string err))
-     nil)))
+  "Parse BODY as JSON, returning an alist, scalar JSON value, or nil on error."
+  (if (or (null body) (string-empty-p body))
+      nil
+    (condition-case err
+        (json-parse-string body :object-type 'alist :array-type 'list)
+      (error
+       (memoryelaine-log-error "JSON parse error: %s" (error-message-string err))
+       nil))))
 
 (defun memoryelaine-http-request (method path params callback)
   "Make an async HTTP request.
