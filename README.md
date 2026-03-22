@@ -122,8 +122,11 @@ Exact path allowlist for payload capture. Requests on other paths are still prox
 #### `management.listen_addr`
 Address for the management server. Must differ from proxy.listen_addr. Default: `0.0.0.0:8080`
 
+#### `management.preview_bytes`
+Maximum bytes returned in body preview responses via `/api/logs/{id}/body`. Default: `65536` (64 KiB)
+
 #### `management.auth.username`
-Basic Auth username for `/`, `/api/logs`, `/api/logs/{id}`, and `/metrics`. Default: `admin`
+Basic Auth username for `/`, `/api/logs`, `/api/logs/{id}`, `/api/logs/{id}/body`, and `/metrics`. Default: `admin`
 
 #### `management.auth.password`
 Basic Auth password for the management endpoints above. Default: `changeme`
@@ -142,8 +145,9 @@ Structured log verbosity for the service process. Accepted values: `debug`, `inf
 ### Endpoints
 
 - `GET /` - Embedded Web UI (Basic Auth protected)
-- `GET /api/logs` - JSON list API (Basic Auth protected)
-- `GET /api/logs/{id}` - JSON detail API with stream-view metadata (Basic Auth protected)
+- `GET /api/logs` - Log summaries (no bodies/headers). Supports `query`, `limit`, `offset` parameters. (Basic Auth protected)
+- `GET /api/logs/{id}` - Log detail metadata with decoded headers and stream-view availability. No bodies. (Basic Auth protected)
+- `GET /api/logs/{id}/body` - Request or response body content. Params: `part` (req|resp, default: resp), `mode` (raw|assembled, default: raw), `full` (true|false, default: false). (Basic Auth protected)
 - `GET /api/recording` - Current runtime recording state (Basic Auth protected)
 - `PUT /api/recording` - Change runtime recording state with `{"recording":true|false}` (Basic Auth protected)
 - `GET /last-request` - Latest captured request body (Basic Auth protected)
@@ -153,14 +157,28 @@ Structured log verbosity for the service process. Accepted values: `debug`, `inf
 
 ### Query Parameters
 
-`GET /api/logs` accepts:
-- `limit`: integer, max 1000
-- `offset`: integer
-- `status`: exact status code
-- `path`: exact request path
-- `since`: unix timestamp in milliseconds
-- `until`: unix timestamp in milliseconds
-- `q`: substring search across request/response bodies
+`GET /api/logs` accepts a `query` parameter with a DSL string (see below), plus `limit` (integer, max 1000) and `offset` (integer). When `query` is absent, legacy parameters are accepted as fallback: `status`, `path`, `q`, `since`, `until`.
+
+### Query DSL
+
+The `query` parameter accepts a search string combining free-text and structured filters:
+
+- Bare words: full-text search (FTS5) across request and response bodies
+- `status:200` or `status:4xx` — filter by status code or wildcard range
+- `method:POST` — filter by HTTP method
+- `path:/v1/chat/completions` — filter by request path
+- `since:1h` or `since:2024-01-01T00:00:00Z` — entries after time
+- `until:24h` or `until:2024-01-01T00:00:00Z` — entries older than time
+- `is:error`, `is:truncated` — flag filters
+- `has:req-body`, `has:resp-body` — body presence filters
+- `-status:500` — negate any filter
+- `"exact phrase"` — quoted phrase search
+
+**Example:** `status:2xx method:POST path:/chat hello world`
+
+### Configuration
+
+- `management.preview_bytes`: max bytes returned in body preview (default: 65536)
 
 When one or more loggable requests have been proxied while recording is paused, `/last-request` and `/last-response` keep serving the last captured bodies but label them as stale until a newly captured body replaces them.
 

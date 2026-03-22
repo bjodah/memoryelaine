@@ -334,6 +334,8 @@ logging:
 - `listen_addr`: management listener address
 - `auth.username`: Basic Auth username
 - `auth.password`: Basic Auth password
+- `preview_bytes`: maximum bytes returned in body preview responses via
+  `/api/logs/{id}/body` (default: 65536)
 
 ### 9.3 `database`
 
@@ -357,9 +359,15 @@ Basic Auth is required for all management endpoints except `/health`.
 - `GET /`
   Embedded Web UI.
 - `GET /api/logs`
-  Paginated JSON list API.
+  Log summaries (no bodies or headers). Returns paginated metadata only.
 - `GET /api/logs/{id}`
-  JSON detail API for a single record, including derived stream-view metadata.
+  Log detail metadata with decoded headers and stream-view availability. No
+  bodies are included in this response.
+- `GET /api/logs/{id}/body`
+  Request or response body content. Accepts `part` (req|resp, default: resp),
+  `mode` (raw|assembled, default: raw), and `full` (true|false, default:
+  false) query parameters. Body previews are limited to
+  `management.preview_bytes` (default: 65536) unless `full=true`.
 - `GET /api/recording`
   Authenticated JSON endpoint returning the current runtime recording state.
 - `PUT /api/recording`
@@ -375,10 +383,11 @@ Basic Auth is required for all management endpoints except `/health`.
 
 ### 10.3 `/api/logs` Query Parameters
 
-`GET /api/logs` accepts:
+`GET /api/logs` accepts a `query` parameter containing a DSL string (see
+§10.3.1), plus `limit` (integer, max 1000) and `offset` (integer).
 
-- `limit`: integer, max 1000
-- `offset`: integer
+When `query` is absent, legacy parameters are accepted as fallback:
+
 - `status`: exact status code
 - `path`: exact request path
 - `since`: unix timestamp in milliseconds
@@ -389,23 +398,41 @@ Response shape:
 
 ```json
 {
-  "data": [/* log entries */],
+  "data": [/* log summaries */],
   "total": 123
 }
 ```
 
+#### 10.3.1 Query DSL
+
+The `query` parameter accepts a search string combining free-text and
+structured filters:
+
+- Bare words: full-text search (FTS5) across request and response bodies
+- `status:200` or `status:4xx` — filter by status code or wildcard range
+- `method:POST` — filter by HTTP method
+- `path:/v1/chat/completions` — filter by request path
+- `since:1h` or `since:2024-01-01T00:00:00Z` — entries after time
+- `until:24h` or `until:2024-01-01T00:00:00Z` — entries older than time
+- `is:error`, `is:truncated` — flag filters
+- `has:req-body`, `has:resp-body` — body presence filters
+- `-status:500` — negate any filter
+- `"exact phrase"` — quoted phrase search
+
+Example: `status:2xx method:POST path:/chat hello world`
+
 ### 10.4 `/api/logs/{id}` Detail Response
 
-The detail endpoint returns the stored log entry plus derived stream-view
-metadata for the response body.
+The detail endpoint returns log metadata plus decoded request and response
+headers and stream-view availability. Bodies are not included; use
+`/api/logs/{id}/body` to retrieve body content.
 
 Response shape:
 
 ```json
 {
-  "entry": { /* log entry */ },
+  "entry": { /* log metadata with decoded headers */ },
   "stream_view": {
-    "assembled_body": "...",
     "assembled_available": true,
     "reason": "supported"
   }
@@ -414,13 +441,29 @@ Response shape:
 
 Notes:
 
-- `assembled_body` may be omitted or empty when assembled mode is unavailable
 - `reason` is machine-stable and indicates whether assembled mode is fully
   available, partially available, or unavailable
 - `reason` values may include `supported`, `partial_parse`, `truncated`,
   `unsupported_path`, `unsupported_multi_choice`,
   `unsupported_tool_call_stream`, `no_text_content`, `not_sse`,
   `missing_body`, and `parse_failed`
+
+### 10.4.1 `/api/logs/{id}/body`
+
+Retrieves request or response body content for a single log entry.
+
+Query parameters:
+
+- `part`: `req` or `resp` (default: `resp`)
+- `mode`: `raw` or `assembled` (default: `raw`)
+- `full`: `true` or `false` (default: `false`)
+
+When `full=false`, the response is limited to `management.preview_bytes`
+(default: 65536). When `full=true`, the complete stored body is returned.
+
+When `mode=assembled`, the endpoint returns the derived assembled text for
+supported streamed responses. If assembly is unavailable, the endpoint falls
+back to the raw body.
 
 ### 10.5 `/last-request` and `/last-response`
 

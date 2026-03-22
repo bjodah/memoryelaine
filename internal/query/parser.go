@@ -168,9 +168,12 @@ func Parse(input string) ([]Term, error) {
 			tok = tok[1:]
 		}
 
-		// Check for quoted phrase
+		// Check for quoted phrase — strip exactly the surrounding quotes
 		if strings.HasPrefix(tok, "\"") {
-			val := strings.Trim(tok, "\"")
+			val := tok[1:]
+			if strings.HasSuffix(val, "\"") {
+				val = val[:len(val)-1]
+			}
 			terms = append(terms, Term{Kind: TermText, Value: val, Negated: negated})
 			continue
 		}

@@ -24,7 +24,7 @@ type Model struct {
 	mode       viewMode
 	reader     *database.LogReader
 	filter     database.QueryFilter
-	entries    []database.LogEntry
+	entries    []database.LogSummary
 	total      int64
 	cursor     int
 	detail     *database.LogEntry
@@ -42,7 +42,7 @@ type streamViewState struct {
 }
 
 type logsLoadedMsg struct {
-	entries []database.LogEntry
+	entries []database.LogSummary
 	total   int64
 }
 type logDetailMsg struct {
@@ -339,7 +339,7 @@ func (m Model) streamViewStatusLine() string {
 }
 
 func (m Model) loadLogs() tea.Msg {
-	entries, err := m.reader.Query(m.filter)
+	entries, err := m.reader.QuerySummaries(m.filter)
 	if err != nil {
 		return errMsg{err}
 	}
