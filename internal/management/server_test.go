@@ -685,8 +685,6 @@ func TestLastEndpoints_FallbackToDatabase(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
-func intPtr(n int) *int { return &n }
-
 // insertAndFlush enqueues a LogEntry, flushes the writer, and returns deps
 // ready to use with NewMux.
 func insertAndFlush(t *testing.T, deps ServerDeps, entries ...database.LogEntry) {

@@ -76,7 +76,7 @@ func tokenize(input string) (tokens []string, positions []int) {
 			}
 			if i < len(input) {
 				b.WriteByte('"') // closing quote
-				i++             // skip closing quote
+				i++              // skip closing quote
 			}
 		} else {
 			// unquoted token — read until whitespace
@@ -170,10 +170,7 @@ func Parse(input string) ([]Term, error) {
 
 		// Check for quoted phrase — strip exactly the surrounding quotes
 		if strings.HasPrefix(tok, "\"") {
-			val := tok[1:]
-			if strings.HasSuffix(val, "\"") {
-				val = val[:len(val)-1]
-			}
+			val := strings.TrimSuffix(tok[1:], "\"")
 			terms = append(terms, Term{Kind: TermText, Value: val, Negated: negated})
 			continue
 		}
