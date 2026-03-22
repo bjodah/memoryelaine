@@ -169,8 +169,8 @@ The `query` parameter accepts a search string combining free-text and structured
 - `path:/v1/chat/completions` — filter by request path
 - `since:1h` or `since:2024-01-01T00:00:00Z` — entries after time
 - `until:24h` or `until:2024-01-01T00:00:00Z` — entries older than time
-- `is:error`, `is:truncated` — flag filters
-- `has:req-body`, `has:resp-body` — body presence filters
+- `is:error`, `is:req-truncated`, `is:resp-truncated` — flag filters
+- `has:req`, `has:resp` — body presence filters
 - `-status:500` — negate any filter
 - `"exact phrase"` — quoted phrase search
 

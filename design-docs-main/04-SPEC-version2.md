@@ -13,6 +13,7 @@ The system exposes multiple ways to inspect stored logs:
 - a CLI (`memoryelaine log`)
 - a Terminal UI (`memoryelaine tui`)
 - a Web UI and JSON API on the management port
+- an Emacs client
 
 For streamed responses, the system stores the raw captured response body as the
 canonical record. Viewers may additionally offer a derived `Stream view mode`
@@ -399,7 +400,10 @@ Response shape:
 ```json
 {
   "data": [/* log summaries */],
-  "total": 123
+  "total": 123,
+  "limit": 50,
+  "offset": 0,
+  "has_more": true
 }
 ```
 
@@ -414,8 +418,8 @@ structured filters:
 - `path:/v1/chat/completions` — filter by request path
 - `since:1h` or `since:2024-01-01T00:00:00Z` — entries after time
 - `until:24h` or `until:2024-01-01T00:00:00Z` — entries older than time
-- `is:error`, `is:truncated` — flag filters
-- `has:req-body`, `has:resp-body` — body presence filters
+- `is:error`, `is:req-truncated`, `is:resp-truncated` — flag filters
+- `has:req`, `has:resp` — body presence filters
 - `-status:500` — negate any filter
 - `"exact phrase"` — quoted phrase search
 
@@ -462,8 +466,9 @@ When `full=false`, the response is limited to `management.preview_bytes`
 (default: 65536). When `full=true`, the complete stored body is returned.
 
 When `mode=assembled`, the endpoint returns the derived assembled text for
-supported streamed responses. If assembly is unavailable, the endpoint falls
-back to the raw body.
+supported streamed responses. If assembly is unavailable, the endpoint returns
+`available: false` with a `reason` field explaining why (e.g., `not_sse`,
+`truncated`).
 
 ### 10.5 `/last-request` and `/last-response`
 
