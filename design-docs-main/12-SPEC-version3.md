@@ -1,4 +1,4 @@
-# Product Specification v2: `memoryelaine`
+# Product Specification v3: `memoryelaine`
 
 ## 1. Overview
 
@@ -13,6 +13,7 @@ The system exposes multiple ways to inspect stored logs:
 - a CLI (`memoryelaine log`)
 - a Terminal UI (`memoryelaine tui`)
 - a Web UI and JSON API on the management port
+- an Emacs client
 
 For streamed responses, the system stores the raw captured response body as the
 canonical record. Viewers may additionally offer a derived `Stream view mode`
@@ -210,8 +211,8 @@ If any of these conditions fail, viewers must fall back to `Raw`.
 For `/v1/chat/completions`:
 
 - assemble text from streamed `choices[0].delta.content` fragments
-- reject multi-choice streams as unsupported in v2
-- reject tool-call / function-call streams as unsupported in v2
+- reject multi-choice streams as unsupported in v3
+- reject tool-call / function-call streams as unsupported in v3
 - handle empty `choices` arrays (e.g. usage-only chunks) by skipping the event
 - handle `choices[0].delta.content` being JSON `null` or absent by skipping
   the event
@@ -219,11 +220,11 @@ For `/v1/chat/completions`:
 For `/v1/completions`:
 
 - assemble text from streamed `choices[0].text` fragments
-- reject multi-choice streams as unsupported in v2
+- reject multi-choice streams as unsupported in v3
 - handle empty `choices` arrays by skipping the event
 - handle `choices[0].text` being JSON `null` or absent by skipping the event
 
-In v2, assembled rendering is defined only for single-choice text streams.
+In v3, assembled rendering is defined only for single-choice text streams.
 
 If the stream parses completely but yields no text content (e.g. role-only or
 usage-only deltas), assembled mode is unavailable and the viewer falls back to
@@ -240,13 +241,13 @@ Stream view mode is required in:
 - the Terminal UI
 - the Web UI
 
-It is not required in `memoryelaine log` in v2.
+It is not required in `memoryelaine log` in v3.
 
 ## 8. Database
 
 ### 8.1 Storage Engine
 
-SQLite is the sole supported database in v2.
+SQLite is the sole supported database in v3.
 
 Every process connecting to the database must use WAL-compatible settings to
 allow concurrent reads while the proxy is writing.
@@ -334,6 +335,8 @@ logging:
 - `listen_addr`: management listener address
 - `auth.username`: Basic Auth username
 - `auth.password`: Basic Auth password
+- `preview_bytes`: maximum bytes returned in body preview responses via
+  `/api/logs/{id}/body` (default: 65536)
 
 ### 9.3 `database`
 
@@ -357,9 +360,15 @@ Basic Auth is required for all management endpoints except `/health`.
 - `GET /`
   Embedded Web UI.
 - `GET /api/logs`
-  Paginated JSON list API.
+  Log summaries (no bodies or headers). Returns paginated metadata only.
 - `GET /api/logs/{id}`
-  JSON detail API for a single record, including derived stream-view metadata.
+  Log detail metadata with decoded headers and stream-view availability. No
+  bodies are included in this response.
+- `GET /api/logs/{id}/body`
+  Request or response body content. Accepts `part` (req|resp, default: resp),
+  `mode` (raw|assembled, default: raw), and `full` (true|false, default:
+  false) query parameters. Body previews are limited to
+  `management.preview_bytes` (default: 65536) unless `full=true`.
 - `GET /api/recording`
   Authenticated JSON endpoint returning the current runtime recording state.
 - `PUT /api/recording`
@@ -375,37 +384,75 @@ Basic Auth is required for all management endpoints except `/health`.
 
 ### 10.3 `/api/logs` Query Parameters
 
-`GET /api/logs` accepts:
+`GET /api/logs` accepts a `query` parameter containing a DSL string (see
+§10.3.1), plus `limit` (integer, max 1000) and `offset` (integer).
 
-- `limit`: integer, max 1000
-- `offset`: integer
+When `query` is absent, legacy parameters are accepted as fallback:
+
 - `status`: exact status code
 - `path`: exact request path
 - `since`: unix timestamp in milliseconds
 - `until`: unix timestamp in milliseconds
-- `q`: substring search across `req_body` and `resp_body`
+- `q`: compatibility-only free-text search across `req_body` and `resp_body`
+
+Legacy `q` is treated as sanitized literal text input for FTS-backed search.
+Clients must not rely on raw SQLite FTS syntax through this parameter.
 
 Response shape:
 
 ```json
 {
-  "data": [/* log entries */],
-  "total": 123
+  "data": [/* log summaries */],
+  "total": 123,
+  "limit": 50,
+  "offset": 0,
+  "has_more": true
 }
 ```
 
+If the `query` DSL is invalid, the endpoint returns `400 Bad Request` with a
+structured error response:
+
+```json
+{
+  "error": "query_parse_error",
+  "message": "invalid status value \"abc\""
+}
+```
+
+Implementations may include additional machine-readable parser fields such as
+`token` and `position`.
+
+#### 10.3.1 Query DSL
+
+The `query` parameter accepts a search string combining free-text and
+structured filters:
+
+- Bare words: full-text search (FTS5) across request and response bodies
+- `status:200` or `status:4xx` — filter by status code or wildcard range
+- `method:POST` — filter by HTTP method
+- `path:/v1/chat/completions` — filter by request path
+- `since:1h` or `since:2024-01-01T00:00:00Z` — entries after time
+- `until:24h` or `until:2024-01-01T00:00:00Z` — entries older than time
+- `is:error`, `is:req-truncated`, `is:resp-truncated` — flag filters
+- `has:req`, `has:resp` — body presence filters
+- `-status:500` — negate any filter
+- `"exact phrase"` — quoted phrase search
+
+Example: `status:2xx method:POST path:/chat hello world`
+
 ### 10.4 `/api/logs/{id}` Detail Response
 
-The detail endpoint returns the stored log entry plus derived stream-view
-metadata for the response body.
+The detail endpoint returns log metadata plus decoded request and response
+headers and stream-view availability. Bodies are not included; use
+`/api/logs/{id}/body` to retrieve body content.
 
 Response shape:
 
 ```json
 {
-  "entry": { /* log entry */ },
+  "entry": { /* log metadata with decoded headers */ },
   "stream_view": {
-    "assembled_body": "...",
     "assembled_available": true,
     "reason": "supported"
   }
@@ -414,13 +461,60 @@ Response shape:
 
 Notes:
 
-- `assembled_body` may be omitted or empty when assembled mode is unavailable
 - `reason` is machine-stable and indicates whether assembled mode is fully
   available, partially available, or unavailable
 - `reason` values may include `supported`, `partial_parse`, `truncated`,
   `unsupported_path`, `unsupported_multi_choice`,
   `unsupported_tool_call_stream`, `no_text_content`, `not_sse`,
   `missing_body`, and `parse_failed`
+
+### 10.4.1 `/api/logs/{id}/body`
+
+Retrieves request or response body content for a single log entry.
+
+Query parameters:
+
+- `part`: `req` or `resp` (default: `resp`)
+- `mode`: `raw` or `assembled` (default: `raw`)
+- `full`: `true` or `false` (default: `false`)
+
+When `full=false`, the response is limited to `management.preview_bytes`
+(default: 65536). When `full=true`, the complete stored body is returned.
+
+When `mode=assembled`, the endpoint returns the derived assembled text for
+supported streamed responses. If assembly is unavailable, the endpoint returns
+`available: false` with a `reason` field explaining why (e.g., `not_sse`,
+`truncated`).
+
+Response shape:
+
+```json
+{
+  "part": "resp",
+  "mode": "assembled",
+  "full": false,
+  "content": "Hello world",
+  "included_bytes": 11,
+  "total_bytes": 42,
+  "truncated": true,
+  "available": true,
+  "reason": ""
+}
+```
+
+Notes:
+
+- `included_bytes` and `total_bytes` describe the bytes for the requested
+  representation, not some other representation of the same body. For example,
+  `mode=assembled` reports assembled-content byte counts, while `mode=raw`
+  reports raw stored-body byte counts.
+- For unavailable bodies, `available` is `false`, `content` may be empty, and
+  `reason` explains why the requested representation cannot be returned.
+- `part=req` with `mode=assembled` is invalid and must return
+  `400 Bad Request`.
+- `404 Not Found` is returned when the log entry ID does not exist.
+- Operational backend failures should return `500 Internal Server Error` rather
+  than being reported as not-found.
 
 ### 10.5 `/last-request` and `/last-response`
 
@@ -531,7 +625,7 @@ Required detail behavior:
   `Assembled`
 - if the assembled result is partial, display a clear warning state
 
-The v2 TUI does not require arbitrary text search, path filters, or time-range
+The v3 TUI does not require arbitrary text search, path filters, or time-range
 editing from inside the terminal UI.
 
 ## 13. Web UI Behavior

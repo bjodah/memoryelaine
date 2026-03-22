@@ -26,8 +26,9 @@ type ProxyConfig struct {
 }
 
 type ManagementConfig struct {
-	ListenAddr string     `mapstructure:"listen_addr"`
-	Auth       AuthConfig `mapstructure:"auth"`
+	ListenAddr   string     `mapstructure:"listen_addr"`
+	Auth         AuthConfig `mapstructure:"auth"`
+	PreviewBytes int        `mapstructure:"preview_bytes"`
 }
 
 type AuthConfig struct {
@@ -57,6 +58,7 @@ func Load(cfgPath string) (*Config, error) {
 	v.SetDefault("management.listen_addr", "0.0.0.0:8080")
 	v.SetDefault("management.auth.username", "admin")
 	v.SetDefault("management.auth.password", "changeme")
+	v.SetDefault("management.preview_bytes", 65536)
 	v.SetDefault("database.path", "./memoryelaine.db")
 	v.SetDefault("logging.max_capture_bytes", 8388608)
 	v.SetDefault("logging.level", "info")
@@ -112,6 +114,10 @@ func (c *Config) validate() error {
 
 	if len(c.Proxy.LogPaths) == 0 {
 		return fmt.Errorf("log_paths must not be empty")
+	}
+
+	if c.Management.PreviewBytes <= 0 {
+		return fmt.Errorf("management.preview_bytes must be > 0, got %d", c.Management.PreviewBytes)
 	}
 
 	if c.Management.Auth.Username == "admin" && c.Management.Auth.Password == "changeme" {

@@ -11,6 +11,7 @@ management:
   auth:
     username: "admin"
     password: "changeme"
+  preview_bytes: 65536  # 64KB — max body bytes returned inline
 
 database:
   path: "./memoryelaine.db"

@@ -131,6 +131,133 @@ func (r *LogReader) PingContext(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
 
+// QuerySummaries returns lightweight summaries matching the filter.
+// It does not select body or header columns.
+func (r *LogReader) QuerySummaries(filter QueryFilter) ([]LogSummary, error) {
+	where, args := buildWhere(filter)
+	order := "DESC"
+	if !filter.OrderDesc {
+		order = "ASC"
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, status_code, req_bytes, resp_bytes, req_truncated, resp_truncated, COALESCE(LENGTH(req_body), 0) AS req_body_len, COALESCE(LENGTH(resp_body), 0) AS resp_body_len, error FROM openai_logs %s ORDER BY ts_start %s LIMIT ? OFFSET ?`,
+		where, order,
+	)
+	args = append(args, limit, filter.Offset)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying log summaries: %w", err)
+	}
+
+	var summaries []LogSummary
+	for rows.Next() {
+		var s LogSummary
+		if err := rows.Scan(
+			&s.ID, &s.TsStart, &s.TsEnd, &s.DurationMs, &s.ClientIP,
+			&s.RequestMethod, &s.RequestPath, &s.StatusCode,
+			&s.ReqBytes, &s.RespBytes, &s.ReqTruncated, &s.RespTruncated,
+			&s.ReqBodyLen, &s.RespBodyLen,
+			&s.Error,
+		); err != nil {
+			return nil, fmt.Errorf("scanning log summary: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, fmt.Errorf("iterating log summaries: %w (close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("iterating log summaries: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing log summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+// QuerySummariesRaw returns lightweight summaries with an additional raw WHERE clause.
+// The extraWhere should NOT include the "WHERE" keyword — it will be ANDed with
+// any conditions from the filter.
+func (r *LogReader) QuerySummariesRaw(filter QueryFilter, extraWhere string, extraArgs []interface{}) ([]LogSummary, error) {
+	where, args := buildWhere(filter)
+	if extraWhere != "" {
+		if where == "" {
+			where = "WHERE " + extraWhere
+		} else {
+			where += " AND " + extraWhere
+		}
+		args = append(args, extraArgs...)
+	}
+	order := "DESC"
+	if !filter.OrderDesc {
+		order = "ASC"
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, status_code, req_bytes, resp_bytes, req_truncated, resp_truncated, COALESCE(LENGTH(req_body), 0) AS req_body_len, COALESCE(LENGTH(resp_body), 0) AS resp_body_len, error FROM openai_logs %s ORDER BY ts_start %s LIMIT ? OFFSET ?`,
+		where, order,
+	)
+	args = append(args, limit, filter.Offset)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying log summaries: %w", err)
+	}
+
+	var summaries []LogSummary
+	for rows.Next() {
+		var s LogSummary
+		if err := rows.Scan(
+			&s.ID, &s.TsStart, &s.TsEnd, &s.DurationMs, &s.ClientIP,
+			&s.RequestMethod, &s.RequestPath, &s.StatusCode,
+			&s.ReqBytes, &s.RespBytes, &s.ReqTruncated, &s.RespTruncated,
+			&s.ReqBodyLen, &s.RespBodyLen,
+			&s.Error,
+		); err != nil {
+			return nil, fmt.Errorf("scanning log summary: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, fmt.Errorf("iterating log summaries: %w (close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("iterating log summaries: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing log summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+// CountRaw returns total rows with an additional raw WHERE clause.
+// The extraWhere should NOT include the "WHERE" keyword.
+func (r *LogReader) CountRaw(filter QueryFilter, extraWhere string, extraArgs []interface{}) (int64, error) {
+	where, args := buildWhere(filter)
+	if extraWhere != "" {
+		if where == "" {
+			where = "WHERE " + extraWhere
+		} else {
+			where += " AND " + extraWhere
+		}
+		args = append(args, extraArgs...)
+	}
+	query := fmt.Sprintf("SELECT COUNT(*) FROM openai_logs %s", where)
+	var count int64
+	err := r.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
 func buildWhere(f QueryFilter) (string, []interface{}) {
 	var conds []string
 	var args []interface{}
@@ -152,13 +279,80 @@ func buildWhere(f QueryFilter) (string, []interface{}) {
 		args = append(args, *f.Until)
 	}
 	if f.Search != nil {
-		conds = append(conds, "(req_body LIKE ? OR resp_body LIKE ?)")
-		pattern := "%" + *f.Search + "%"
-		args = append(args, pattern, pattern)
+		sanitized := sanitizeFTS5Input(*f.Search)
+		if sanitized != "" {
+			conds = append(conds, "id IN (SELECT rowid FROM openai_logs_fts WHERE openai_logs_fts MATCH ?)")
+			args = append(args, sanitized)
+		}
 	}
 
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return "WHERE " + strings.Join(conds, " AND "), args
+}
+
+// sanitizeFTS5Input strips characters that have special meaning in FTS5
+// query syntax to prevent malformed MATCH expressions from user input.
+func sanitizeFTS5Input(s string) string {
+	tokens := splitFTS5Input(s)
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		sanitized := sanitizeFTS5Token(token)
+		if sanitized == "" {
+			continue
+		}
+		if strings.ContainsAny(sanitized, " \t") {
+			parts = append(parts, fmt.Sprintf(`"%s"`, sanitized))
+		} else {
+			parts = append(parts, sanitized)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func sanitizeFTS5Token(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '"', '*', '^', '(', ')', '{', '}', '+':
+			// skip FTS5 control characters
+		default:
+			b.WriteRune(r)
+		}
+	}
+	result := strings.TrimSpace(b.String())
+	upper := strings.ToUpper(result)
+	if upper == "OR" || upper == "AND" || upper == "NOT" || upper == "NEAR" {
+		return ""
+	}
+	return result
+}
+
+func splitFTS5Input(s string) []string {
+	var tokens []string
+	var b strings.Builder
+	inQuote := false
+
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, b.String())
+		b.Reset()
+	}
+
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case !inQuote && (r == ' ' || r == '\t' || r == '\n' || r == '\r'):
+			flush()
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
 }
