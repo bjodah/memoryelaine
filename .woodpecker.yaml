@@ -22,6 +22,7 @@ steps:
       - bash -lc "./scripts/build-and-test.sh"
       - bash -lc 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1'
       - bash -lc "./scripts/run-lint-checks.sh"
+      - bash -lc "./scripts/run-emacs-ert-tests.sh"
       - find $(bash -lc 'go env GOMODCACHE') -type f -mtime +90 -exec rm {} \;
       - tar -C / -cf cache-ci.tar $(bash -lc 'go env GOMODCACHE')
       - curl -T cache-ci.tar ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/
