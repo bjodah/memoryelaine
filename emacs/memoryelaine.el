@@ -15,13 +15,6 @@
 
 ;;; Code:
 
-(require 'memoryelaine-log)
-(require 'memoryelaine-auth)
-(require 'memoryelaine-http)
-(require 'memoryelaine-state)
-(require 'memoryelaine-search)
-(require 'memoryelaine-show)
-
 (defgroup memoryelaine nil
   "Emacs client for memoryelaine API proxy."
   :group 'tools
@@ -80,6 +73,13 @@ When nil, auth-source is tried first."
 Called with one argument: the entry ID (integer)."
   :type 'function
   :group 'memoryelaine)
+
+(require 'memoryelaine-log)
+(require 'memoryelaine-auth)
+(require 'memoryelaine-http)
+(require 'memoryelaine-state)
+(require 'memoryelaine-search)
+(require 'memoryelaine-show)
 
 ;;;###autoload
 (defun memoryelaine ()

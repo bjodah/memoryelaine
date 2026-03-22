@@ -12,12 +12,6 @@
 (add-to-list 'load-path (file-name-directory (or load-file-name buffer-file-name)))
 
 (require 'memoryelaine)
-(require 'memoryelaine-log)
-(require 'memoryelaine-auth)
-(require 'memoryelaine-http)
-(require 'memoryelaine-state)
-(require 'memoryelaine-search)
-(require 'memoryelaine-show)
 
 ;;; --- Log tests ---
 
