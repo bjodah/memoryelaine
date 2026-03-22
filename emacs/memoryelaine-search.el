@@ -103,7 +103,7 @@
    "/api/recording" nil
    (lambda (status data _err)
      (when (and (>= status 200) (< status 300) data)
-       (memoryelaine-state-set-recording (alist-get 'recording data))
+       (memoryelaine-state-set-recording (eq (alist-get 'recording data) t))
        (memoryelaine-search--update-header)))))
 
 ;; --- Rendering ---
@@ -203,16 +203,16 @@
 (defun memoryelaine-search-toggle-recording ()
   "Toggle the server's recording state."
   (interactive)
-  (let ((new-state (not memoryelaine-state--recording)))
+  (let ((new-state (if memoryelaine-state--recording :json-false t)))
     (memoryelaine-http-put
      "/api/recording" nil
      `((recording . ,new-state))
      (lambda (status data _err)
        (when (and (>= status 200) (< status 300) data)
-         (memoryelaine-state-set-recording (alist-get 'recording data))
+         (memoryelaine-state-set-recording (eq (alist-get 'recording data) t))
          (memoryelaine-search--update-header)
          (message "memoryelaine: recording %s"
-                  (if (alist-get 'recording data) "ON" "PAUSED")))))))
+                  (if (eq (alist-get 'recording data) t) "ON" "PAUSED")))))))
 
 ;; --- Live search ---
 

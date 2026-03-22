@@ -133,6 +133,12 @@ Returns the process object for this request."
 PATH, PARAMS, and CALLBACK as in `memoryelaine-http-request'."
   (memoryelaine-http-request "GET" path params callback))
 
+(defun memoryelaine-http--json-encode-object (alist)
+  "Encode ALIST as a JSON object string.
+Keys may be strings or symbols."
+  (let ((json-object-type 'alist))
+    (json-encode alist)))
+
 (defun memoryelaine-http-put (path params body-alist callback)
   "Make an async PUT request with a JSON body.
 PATH, PARAMS as in `memoryelaine-http-request'.
@@ -146,7 +152,7 @@ Returns the process object for this request."
                               (base64-encode-string
                                (format "%s:%s" (car creds) (cdr creds))
                                t)))
-         (json-body (json-serialize body-alist))
+         (json-body (memoryelaine-http--json-encode-object body-alist))
          (curl-program (symbol-value 'memoryelaine-curl-program))
          (owner-buf (current-buffer))
          (buf (generate-new-buffer " *memoryelaine-curl*"))

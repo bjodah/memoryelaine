@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 
 ;; Add package directory to load path
 (add-to-list 'load-path (file-name-directory (or load-file-name buffer-file-name)))
@@ -96,6 +97,16 @@
   (let ((result (memoryelaine-http--parse-json "{\"id\": 42, \"name\": \"test\"}")))
     (should (= (alist-get 'id result) 42))
     (should (equal (alist-get 'name result) "test"))))
+
+(ert-deftest memoryelaine-test-http-parse-json-false-is-keyword ()
+  "Test JSON false parsing matches Emacs json semantics."
+  (let ((result (memoryelaine-http--parse-json "{\"recording\": false}")))
+    (should (eq (alist-get 'recording result) :false))))
+
+(ert-deftest memoryelaine-test-http-json-encode-object-false ()
+  "Test JSON object encoding preserves false booleans."
+  (should (equal (memoryelaine-http--json-encode-object '((recording . :json-false)))
+                 "{\"recording\":false}")))
 
 (ert-deftest memoryelaine-test-http-parse-json-invalid ()
   "Test JSON parsing with invalid input."
@@ -237,6 +248,44 @@
 ;;; --- Search formatting tests ---
 
 (ert-deftest memoryelaine-test-search-format-bytes ()
+
+(ert-deftest memoryelaine-test-search-fetch-recording-state-normalizes-false ()
+  "Fetching recording state should normalize JSON false to nil."
+  (let ((memoryelaine-search-buffer-name "*memoryelaine-test-search*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-search-buffer-name)
+          (memoryelaine-search-mode)
+          (cl-letf (((symbol-function 'memoryelaine-http-get)
+                     (lambda (_path _params callback)
+                       (funcall callback 200 '((recording . :false)) nil))))
+            (setq memoryelaine-state--recording t)
+            (memoryelaine-search--fetch-recording-state)
+            (should (null memoryelaine-state--recording))))
+      (when (get-buffer memoryelaine-search-buffer-name)
+        (kill-buffer memoryelaine-search-buffer-name)))))
+
+(ert-deftest memoryelaine-test-search-toggle-recording-sends-false-and-normalizes-response ()
+  "Toggling recording off should send JSON false and store nil state."
+  (let ((memoryelaine-search-buffer-name "*memoryelaine-test-search*")
+        (captured-body nil)
+        (captured-message nil))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-search-buffer-name)
+          (memoryelaine-search-mode)
+          (cl-letf (((symbol-function 'memoryelaine-http-put)
+                     (lambda (_path _params body callback)
+                       (setq captured-body body)
+                       (funcall callback 200 '((recording . :false)) nil)))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq captured-message (apply #'format fmt args)))))
+            (setq memoryelaine-state--recording t)
+            (memoryelaine-search-toggle-recording)
+            (should (equal captured-body '((recording . :json-false))))
+            (should (null memoryelaine-state--recording))
+            (should (equal captured-message "memoryelaine: recording PAUSED"))))
+      (when (get-buffer memoryelaine-search-buffer-name)
+        (kill-buffer memoryelaine-search-buffer-name)))))
   "Test byte formatting."
   (should (equal (memoryelaine-search--format-bytes 0) "—"))
   (should (equal (memoryelaine-search--format-bytes nil) "—"))
