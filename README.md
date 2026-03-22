@@ -9,10 +9,10 @@ memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible infere
 cp example-config.yaml config.yaml
 
 # Build and test
-./scripts/build-and-test.sh
+CGO_ENABLED=1 GOOS=linux go build -tags sqlite_fts5 -o memoryelaine .
 
 # Run the proxy
-go run . serve --config ./config.yaml
+./memoryelaine serve --config ./config.yaml
 ```
 
 Once the proxy is running:
@@ -203,6 +203,18 @@ Assembled mode is unavailable for truncated, non-streamed, or unsupported respon
 ./scripts/build-and-test.sh
 ./scripts/run-lint-checks.sh
 ```
+
+### Trouble shooting
+
+If you see an error reading: `migrating database: executing FTS schema: creating FTS table: no such module: fts5`
+Try building with fts5 enabled:
+```console
+CGO_ENABLED=1 GOOS=linux go build -tags sqlite_fts5 ...
+CGO_ENABLED=1 GOOS=linux go run -tags sqlite_fts5 . serve --config ./example-config.yaml
+GOFLAGS="-tags=sqlite_fts5" go mod tidy
+```
+
+
 
 ### Repository Layout
 
