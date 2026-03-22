@@ -119,6 +119,12 @@ Used to discard stale responses.")
 (defvar-local memoryelaine-state--resp-body-info nil
   "Alist with body response metadata for response.")
 
+(defvar-local memoryelaine-state--resp-body-assembled-state 'none
+  "Assembled response body loading state: `none', `preview', or `full'.")
+
+(defvar-local memoryelaine-state--resp-body-assembled-info nil
+  "Alist with body response metadata for assembled response.")
+
 (defvar-local memoryelaine-state--detail-loading nil
   "Non-nil when detail data is being fetched.")
 
@@ -138,6 +144,8 @@ Used to discard stale responses.")
         memoryelaine-state--resp-body-assembled nil
         memoryelaine-state--req-body-info nil
         memoryelaine-state--resp-body-info nil
+        memoryelaine-state--resp-body-assembled-state 'none
+        memoryelaine-state--resp-body-assembled-info nil
         memoryelaine-state--detail-loading nil
         memoryelaine-state--detail-generation 0))
 
@@ -157,7 +165,9 @@ PART is \"req\" or \"resp\".  MODE is \"raw\" or \"assembled\"."
              memoryelaine-state--req-body-state (if full 'full 'preview)))
       ("resp"
        (if (string= mode "assembled")
-           (setq memoryelaine-state--resp-body-assembled content)
+           (setq memoryelaine-state--resp-body-assembled content
+                 memoryelaine-state--resp-body-assembled-info body-info
+                 memoryelaine-state--resp-body-assembled-state (if full 'full 'preview))
          (setq memoryelaine-state--resp-body content
                memoryelaine-state--resp-body-info body-info
                memoryelaine-state--resp-body-state (if full 'full 'preview)))))))

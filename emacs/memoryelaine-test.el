@@ -137,6 +137,26 @@
         (when (processp result)
           (delete-process result))))))
 
+(ert-deftest memoryelaine-test-http-cancel-all-is-buffer-local ()
+  "Cancelling requests in one buffer must not kill another buffer's requests."
+  (let ((search-proc nil)
+        (detail-proc nil))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((search-buf (current-buffer)))
+            (setq search-proc (start-process "memoryelaine-test-search" nil "sleep" "10"))
+            (setq memoryelaine-http--active-processes (list search-proc))
+            (with-temp-buffer
+              (setq detail-proc (start-process "memoryelaine-test-detail" nil "sleep" "10"))
+              (setq memoryelaine-http--active-processes (list detail-proc))
+              (memoryelaine-http-cancel-all)
+              (should-not (process-live-p detail-proc)))
+            (with-current-buffer search-buf
+              (should (process-live-p search-proc)))))
+      (dolist (proc (list search-proc detail-proc))
+        (when (process-live-p proc)
+          (delete-process proc))))))
+
 ;;; --- State tests ---
 
 (ert-deftest memoryelaine-test-state-query ()
@@ -200,6 +220,20 @@
                                         '((truncated) (included_bytes . 500) (total_bytes . 500)))
     (should (eq memoryelaine-state--req-body-state 'full))))
 
+(ert-deftest memoryelaine-test-state-detail-set-body-assembled ()
+  "Test assembled response body metadata is tracked independently."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (memoryelaine-state-detail-set-body "resp" "raw" "raw body"
+                                        '((truncated . t) (included_bytes . 100) (total_bytes . 500)))
+    (memoryelaine-state-detail-set-body "resp" "assembled" "assembled body"
+                                        '((truncated . t) (included_bytes . 12) (total_bytes . 24)))
+    (should (equal memoryelaine-state--resp-body "raw body"))
+    (should (equal memoryelaine-state--resp-body-assembled "assembled body"))
+    (should (eq memoryelaine-state--resp-body-state 'preview))
+    (should (eq memoryelaine-state--resp-body-assembled-state 'preview))
+    (should (= (alist-get 'included_bytes memoryelaine-state--resp-body-assembled-info) 12))))
+
 (ert-deftest memoryelaine-test-state-generation ()
   "Test generation counter."
   (let ((memoryelaine-state--generation 0))
@@ -231,6 +265,20 @@
   (let ((result (memoryelaine-show--format-time-range 1700000000000 1700000001000)))
     (should (stringp result))
     (should (string-match-p "→" result))))
+
+(ert-deftest memoryelaine-test-show-insert-body-uses-assembled-metadata ()
+  "Assembled response previews should use assembled byte metadata."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (setq memoryelaine-state--resp-view-mode 'assembled)
+    (memoryelaine-state-detail-set-body "resp" "raw" "raw body"
+                                        '((truncated . t) (included_bytes . 100) (total_bytes . 500)))
+    (memoryelaine-state-detail-set-body "resp" "assembled" "assembled body"
+                                        '((truncated . t) (included_bytes . 12) (total_bytes . 24)))
+    (memoryelaine-show--insert-body "resp")
+    (let ((rendered (buffer-string)))
+      (should (string-match-p "12 B / 24 B" rendered))
+      (should-not (string-match-p "100 B / 500 B" rendered)))))
 
 (provide 'memoryelaine-test)
 ;;; memoryelaine-test.el ends here

@@ -12,8 +12,8 @@
 (require 'memoryelaine-log)
 (require 'memoryelaine-auth)
 
-(defvar memoryelaine-http--active-processes nil
-  "List of active curl process objects.")
+(defvar-local memoryelaine-http--active-processes nil
+  "List of active curl process objects owned by the current buffer.")
 
 (defun memoryelaine-http--curl-error-message (exit-code)
   "Return a friendly error message for curl EXIT-CODE."
@@ -89,17 +89,22 @@ CALLBACK is called with (STATUS-CODE JSON-DATA ERR-STRING).
 Returns the process object for this request."
   (let* ((url (memoryelaine-http--build-url path params))
          (args (memoryelaine-http--build-curl-args url method))
+         (owner-buf (current-buffer))
          (buf (generate-new-buffer " *memoryelaine-curl*"))
          (curl-program (symbol-value 'memoryelaine-curl-program))
          (proc (apply #'start-process
                       "memoryelaine-curl" buf curl-program args)))
     (memoryelaine-log-debug "HTTP %s %s" method url)
-    (push proc memoryelaine-http--active-processes)
+    (when (buffer-live-p owner-buf)
+      (with-current-buffer owner-buf
+        (push proc memoryelaine-http--active-processes)))
     (set-process-sentinel
      proc
      (lambda (process _event)
-       (setq memoryelaine-http--active-processes
-             (delq process memoryelaine-http--active-processes))
+       (when (buffer-live-p owner-buf)
+         (with-current-buffer owner-buf
+           (setq memoryelaine-http--active-processes
+                 (delq process memoryelaine-http--active-processes))))
        (let ((exit-code (process-exit-status process)))
          (unwind-protect
              (if (not (zerop exit-code))
@@ -141,6 +146,7 @@ Returns the process object for this request."
                                t)))
          (json-body (json-serialize body-alist))
          (curl-program (symbol-value 'memoryelaine-curl-program))
+         (owner-buf (current-buffer))
          (buf (generate-new-buffer " *memoryelaine-curl*"))
          (proc (start-process
                 "memoryelaine-curl" buf curl-program
@@ -154,12 +160,16 @@ Returns the process object for this request."
                 "-d" json-body
                 url)))
     (memoryelaine-log-debug "HTTP PUT %s" url)
-    (push proc memoryelaine-http--active-processes)
+    (when (buffer-live-p owner-buf)
+      (with-current-buffer owner-buf
+        (push proc memoryelaine-http--active-processes)))
     (set-process-sentinel
      proc
      (lambda (process _event)
-       (setq memoryelaine-http--active-processes
-             (delq process memoryelaine-http--active-processes))
+       (when (buffer-live-p owner-buf)
+         (with-current-buffer owner-buf
+           (setq memoryelaine-http--active-processes
+                 (delq process memoryelaine-http--active-processes))))
        (let ((exit-code (process-exit-status process)))
          (unwind-protect
              (if (not (zerop exit-code))

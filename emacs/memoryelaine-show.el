@@ -216,12 +216,16 @@ Shows preview/full content with size info, or a placeholder."
                  memoryelaine-state--resp-body-assembled)
                 (is-resp memoryelaine-state--resp-body)
                 (t memoryelaine-state--req-body)))
-         (body-info (if is-resp
-                        memoryelaine-state--resp-body-info
-                      memoryelaine-state--req-body-info))
-         (body-state (if is-resp
-                         memoryelaine-state--resp-body-state
-                       memoryelaine-state--req-body-state)))
+         (body-info (cond
+                     ((and is-resp (eq view-mode 'assembled))
+                      memoryelaine-state--resp-body-assembled-info)
+                     (is-resp memoryelaine-state--resp-body-info)
+                     (t memoryelaine-state--req-body-info)))
+         (body-state (cond
+                      ((and is-resp (eq view-mode 'assembled))
+                       memoryelaine-state--resp-body-assembled-state)
+                      (is-resp memoryelaine-state--resp-body-state)
+                      (t memoryelaine-state--req-body-state))))
     (cond
      ((eq body-state 'none)
       (insert "  [Not loaded]\n"))

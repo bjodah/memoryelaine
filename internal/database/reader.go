@@ -295,6 +295,23 @@ func buildWhere(f QueryFilter) (string, []interface{}) {
 // sanitizeFTS5Input strips characters that have special meaning in FTS5
 // query syntax to prevent malformed MATCH expressions from user input.
 func sanitizeFTS5Input(s string) string {
+	tokens := splitFTS5Input(s)
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		sanitized := sanitizeFTS5Token(token)
+		if sanitized == "" {
+			continue
+		}
+		if strings.ContainsAny(sanitized, " \t") {
+			parts = append(parts, fmt.Sprintf(`"%s"`, sanitized))
+		} else {
+			parts = append(parts, sanitized)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func sanitizeFTS5Token(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
@@ -311,4 +328,31 @@ func sanitizeFTS5Input(s string) string {
 		return ""
 	}
 	return result
+}
+
+func splitFTS5Input(s string) []string {
+	var tokens []string
+	var b strings.Builder
+	inQuote := false
+
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, b.String())
+		b.Reset()
+	}
+
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case !inQuote && (r == ' ' || r == '\t' || r == '\n' || r == '\r'):
+			flush()
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
 }

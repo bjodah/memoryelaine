@@ -275,6 +275,24 @@ func TestReaderQuery_FTSSearch(t *testing.T) {
 	}
 }
 
+func TestSanitizeFTS5Input_DropsDanglingOperators(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "error OR", want: "error"},
+		{input: "AND warning", want: "warning"},
+		{input: "hello NOT world", want: "hello world"},
+		{input: "\"exact phrase\" OR", want: "\"exact phrase\""},
+	}
+
+	for _, tc := range tests {
+		if got := sanitizeFTS5Input(tc.input); got != tc.want {
+			t.Errorf("sanitizeFTS5Input(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestReaderQuery_FTSSpecialChars(t *testing.T) {
 	db := setupTestDB(t)
 	reader := NewLogReader(db)
