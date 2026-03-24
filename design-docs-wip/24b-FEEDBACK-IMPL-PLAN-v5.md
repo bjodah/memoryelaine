@@ -50,24 +50,3 @@ Section 13 is excellent because it mandates test-driven integration. However, to
   * Add: *"Empty array hashing prevention: Ensure a 1-message request does not query the DB for a 0-length parent prefix."*
 * **Under 13.3 (Reader/API Tests):**
   * Add: *"Attribution Clamping: Mock a CTE chain where `parent_prefix_len` is greater than the total `message_count` of the selected entry, verifying the algorithm clamps correctly without panicking."*
-
-### 6. Updating the SPEC Document (Your Suggestion)
-Your suggestion is spot-on. Design documents inevitably drift from reality if not explicitly maintained. `12-SPEC-version3.md` is currently the authoritative ground truth for the repository.
-
-**Add a new section at the very end of the Implementation Plan:**
-
-```markdown
-## 17. Finalization and Documentation
-Once all tests pass and the implementation meets the Acceptance Criteria:
-1. Rename `design-docs-main/12-SPEC-version3.md` to `design-docs-main/25-SPEC-version5.md`.
-2. Update the new SPEC document to reflect the architectural reality of v5. Specifically:
-   - Update the database schema section to include the new lineage and sidecar columns.
-   - Update the FTS architecture documentation to explain the `COALESCE` strategy.
-   - Document the `/api/logs/{id}/thread` endpoint and the `ThreadResponse` DTO.
-   - Update the UI/TUI/Emacs scope sections to officially mandate the Conversation View.
-```
-
-### Summary Conclusion
-The plan is highly robust. The combination of **write-time prefix matching** and **read-time backward attribution** is a massive leap over standard brittle diffing algorithms. 
-
-By fixing the `0-length` prefix bug, tightening up the Emacs UX specifications, and enforcing the SPEC document update at the end, this plan is ready for execution.
