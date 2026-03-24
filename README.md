@@ -195,6 +195,10 @@ Assembled mode is currently supported for:
 
 Assembled mode is unavailable for truncated, non-streamed, or unsupported responses. When parsing only partially succeeds, the recovered text is shown with a warning indicator.
 
+## Emacs client
+
+Under ./emacs/ you will find elisp source for an emacs package.
+
 ## Development
 
 ### Helper Scripts
@@ -213,7 +217,6 @@ CGO_ENABLED=1 GOOS=linux go build -tags sqlite_fts5 ...
 CGO_ENABLED=1 GOOS=linux go run -tags sqlite_fts5 . serve --config ./example-config.yaml
 GOFLAGS="-tags=sqlite_fts5" go mod tidy
 ```
-
 
 
 ### Repository Layout
