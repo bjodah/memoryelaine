@@ -3,6 +3,7 @@ package management
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -442,6 +443,18 @@ func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogRe
 	// The selected entry is the last element in the chain.
 	selected := chain[len(chain)-1]
 
+	// Guards: Thread view is only available for chat/completions and non-truncated requests.
+	if !chat.IsChatPath(selected.RequestPath) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_type",
+			"thread view is only available for /v1/chat/completions requests")
+		return
+	}
+	if selected.ReqTruncated {
+		writeAPIError(w, http.StatusBadRequest, "truncated",
+			"thread view is not available for truncated requests")
+		return
+	}
+
 	// Parse the selected entry's request messages — this is the canonical
 	// conversation up to this turn.
 	msgs, err := chat.ParseMessages(selected.ReqBody)
@@ -515,10 +528,22 @@ func buildThreadMessages(msgs []chat.Message, chain []database.LogEntry, selecte
 	// Build the output.
 	result := make([]ThreadMessage, 0, len(msgs))
 	for i, m := range msgs {
+		isComplex, complexity := chat.GetMessageComplexity(m)
+		content := chat.ExtractContentString(m.Content)
+		logID := attribution[i]
+
+		if content == "" && isComplex {
+			content = fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, logID)
+		} else if content == "" && !isComplex {
+			content = fmt.Sprintf("[Empty message - view raw log #%d]", logID)
+		}
+
 		result = append(result, ThreadMessage{
-			Role:    m.Role,
-			Content: chat.ExtractContentString(m.Content),
-			LogID:   attribution[i],
+			Role:       m.Role,
+			Content:    content,
+			LogID:      logID,
+			IsComplex:  isComplex,
+			Complexity: complexity,
 		})
 	}
 
@@ -536,6 +561,25 @@ func buildThreadMessages(msgs []chat.Message, chain []database.LogEntry, selecte
 				Content: respText,
 				LogID:   selected.ID,
 			})
+		} else {
+			// Check if it's complex (e.g. tool calls only)
+			var resp struct {
+				Choices []struct {
+					Message chat.Message `json:"message"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(*selected.RespBody), &resp); err == nil && len(resp.Choices) > 0 {
+				m := resp.Choices[0].Message
+				if isComplex, complexity := chat.GetMessageComplexity(m); isComplex {
+					result = append(result, ThreadMessage{
+						Role:       "assistant",
+						Content:    fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, selected.ID),
+						LogID:      selected.ID,
+						IsComplex:  true,
+						Complexity: complexity,
+					})
+				}
+			}
 		}
 	}
 

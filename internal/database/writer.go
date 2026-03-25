@@ -167,7 +167,7 @@ func (w *LogWriter) enrichChat(entry *LogEntry) {
 	if !chat.IsChatPath(entry.RequestPath) {
 		return
 	}
-	if entry.ReqBody == "" {
+	if entry.ReqBody == "" || entry.ReqTruncated {
 		return
 	}
 

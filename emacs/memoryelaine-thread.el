@@ -10,6 +10,21 @@
 (require 'memoryelaine-log)
 (require 'memoryelaine-http)
 
+(defface memoryelaine-thread-role-user
+  '((t :foreground "dodger blue" :weight bold))
+  "Face for user role in thread view."
+  :group 'memoryelaine)
+
+(defface memoryelaine-thread-role-assistant
+  '((t :foreground "green3" :weight bold))
+  "Face for assistant role in thread view."
+  :group 'memoryelaine)
+
+(defface memoryelaine-thread-role-system
+  '((t :foreground "gray60" :slant italic))
+  "Face for system/developer role in thread view."
+  :group 'memoryelaine)
+
 (defvar memoryelaine-thread-buffer-name "*memoryelaine-conversation*"
   "Name of the conversation/thread buffer.")
 
@@ -118,23 +133,28 @@
 (defun memoryelaine-thread--role-face (role)
   "Return the face for a message ROLE."
   (cond
-   ((string= role "user") '(:foreground "dodger blue" :weight bold))
-   ((string= role "assistant") '(:foreground "green3" :weight bold))
+   ((string= role "user") 'memoryelaine-thread-role-user)
+   ((string= role "assistant") 'memoryelaine-thread-role-assistant)
    ((or (string= role "system") (string= role "developer"))
-    '(:foreground "gray60" :slant italic))
-   (t '(:weight bold))))
+    'memoryelaine-thread-role-system)
+   (t 'bold)))
 
 (defun memoryelaine-thread--insert-message (role content log-id)
   "Insert a conversation message with ROLE, CONTENT, and LOG-ID."
   (let ((role-face (memoryelaine-thread--role-face role)))
     ;; Role header with log ID
     (insert (propertize (format "── %s " role) 'face role-face))
-    (insert (propertize (format "(Log #%d)" log-id) 'face 'shadow))
+    (insert (propertize "(" 'face 'shadow))
+    (insert-button (format "Log #%d" log-id)
+                   'action (lambda (_) (memoryelaine-show-entry log-id))
+                   'follow-link t
+                   'help-echo "View raw log details")
+    (insert (propertize ")" 'face 'shadow))
     (insert (propertize " ──" 'face role-face))
     (insert "\n")
     ;; Content
     (let ((content-face (if (member role '("system" "developer"))
-                            '(:foreground "gray60" :slant italic)
+                            'memoryelaine-thread-role-system
                           nil)))
       (if content-face
           (insert (propertize (or content "") 'face content-face))

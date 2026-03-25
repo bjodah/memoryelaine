@@ -86,9 +86,11 @@ type APIError struct {
 
 // ThreadMessage represents one message in a reconstructed conversation thread.
 type ThreadMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	LogID   int64  `json:"log_id"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	LogID      int64  `json:"log_id"`
+	IsComplex  bool   `json:"is_complex"`
+	Complexity string `json:"complexity,omitempty"`
 }
 
 // ThreadResponse is the envelope for the thread API.

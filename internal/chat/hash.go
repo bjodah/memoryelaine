@@ -19,21 +19,39 @@ type CanonicalMessage struct {
 // Tool calls and function calls are hashed via ComplexHash to avoid collisions
 // when the text content is empty.
 func canonicalize(m Message) CanonicalMessage {
+	contentStr := ExtractContentString(m.Content)
 	cm := CanonicalMessage{
 		Role:    m.Role,
-		Content: ExtractContentString(m.Content),
+		Content: contentStr,
 	}
 
-	// If the message has tool_calls or function_call, compute ComplexHash from
-	// their compacted JSON bytes so that otherwise-identical messages with
-	// different tool calls produce distinct hashes.
+	// If the message has tool_calls or function_call, or if the content
+	// is complex (multimodal content array where some parts are not text),
+	// compute ComplexHash.
 	if len(m.ToolCalls) > 0 {
 		cm.ComplexHash = compactHash(m.ToolCalls)
 	} else if len(m.FunctionCall) > 0 {
 		cm.ComplexHash = compactHash(m.FunctionCall)
+	} else if isComplexContent(m.Content, contentStr) {
+		cm.ComplexHash = compactHash(m.Content)
 	}
 
 	return cm
+}
+
+// isComplexContent returns true if the content is a JSON array (multimodal)
+// and it contains more than just the text extracted into contentStr.
+func isComplexContent(raw json.RawMessage, contentStr string) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	// If it's a plain string, it's not complex.
+	if raw[0] == '"' {
+		return false
+	}
+	// If it's an array, it's multimodal. We treat all arrays as complex
+	// for hashing purposes if they are used as content.
+	return raw[0] == '['
 }
 
 // compactHash returns the hex SHA-256 of the JSON-compacted input bytes.

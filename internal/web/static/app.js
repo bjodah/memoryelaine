@@ -292,7 +292,17 @@
                             block.className = 'conv-message conv-' + msg.role;
                             const roleEl = document.createElement('div');
                             roleEl.className = 'conv-role';
-                            roleEl.textContent = msg.role + ' (Log #' + msg.log_id + ')';
+                            roleEl.textContent = msg.role + ' (';
+                            const logLink = document.createElement('a');
+                            logLink.href = '#';
+                            logLink.textContent = 'Log #' + msg.log_id;
+                            logLink.onclick = (e) => {
+                                e.preventDefault();
+                                document.getElementById('conversation-container').classList.add('hidden');
+                                loadDetail(msg.log_id);
+                            };
+                            roleEl.appendChild(logLink);
+                            roleEl.appendChild(document.createTextNode(')'));
                             block.appendChild(roleEl);
                             const contentEl = document.createElement('pre');
                             contentEl.className = 'conv-content';

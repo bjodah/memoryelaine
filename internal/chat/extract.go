@@ -112,3 +112,30 @@ func ExtractAssistantResponse(respBody string) string {
 	}
 	return ExtractContentString(content)
 }
+
+// GetMessageComplexity returns true and a reason if the message contains
+// complex elements like tool calls or non-text content parts.
+func GetMessageComplexity(m Message) (bool, string) {
+	if len(m.ToolCalls) > 0 {
+		return true, "tool_calls"
+	}
+	if len(m.FunctionCall) > 0 {
+		return true, "function_call"
+	}
+
+	// Check for non-text multimodal content.
+	if len(m.Content) > 0 && m.Content[0] == '[' {
+		var parts []struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(m.Content, &parts); err == nil {
+			for _, p := range parts {
+				if p.Type != "text" {
+					return true, "multimodal:" + p.Type
+				}
+			}
+		}
+	}
+
+	return false, ""
+}
