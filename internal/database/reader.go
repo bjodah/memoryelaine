@@ -30,7 +30,7 @@ func (r *LogReader) Query(filter QueryFilter) ([]LogEntry, error) {
 	}
 
 	query := fmt.Sprintf(
-		"SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error FROM openai_logs %s ORDER BY ts_start %s LIMIT ? OFFSET ?",
+		"SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error, parent_id, chat_hash, parent_prefix_len, message_count, req_text, resp_text FROM openai_logs %s ORDER BY ts_start %s LIMIT ? OFFSET ?",
 		where, order,
 	)
 	args = append(args, limit, filter.Offset)
@@ -50,6 +50,8 @@ func (r *LogReader) Query(filter QueryFilter) ([]LogEntry, error) {
 			&e.ReqBody, &e.ReqTruncated, &e.ReqBytes,
 			&e.RespBody, &e.RespTruncated, &e.RespBytes,
 			&e.Error,
+			&e.ParentID, &e.ChatHash, &e.ParentPrefixLen, &e.MessageCount,
+			&e.ReqText, &e.RespText,
 		); err != nil {
 			return nil, fmt.Errorf("scanning log row: %w", err)
 		}
@@ -69,7 +71,7 @@ func (r *LogReader) Query(filter QueryFilter) ([]LogEntry, error) {
 
 // GetByID returns a single log entry or sql.ErrNoRows.
 func (r *LogReader) GetByID(id int64) (*LogEntry, error) {
-	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error FROM openai_logs WHERE id = ?"
+	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error, parent_id, chat_hash, parent_prefix_len, message_count, req_text, resp_text FROM openai_logs WHERE id = ?"
 	var e LogEntry
 	err := r.db.QueryRow(query, id).Scan(
 		&e.ID, &e.TsStart, &e.TsEnd, &e.DurationMs, &e.ClientIP,
@@ -78,6 +80,8 @@ func (r *LogReader) GetByID(id int64) (*LogEntry, error) {
 		&e.ReqBody, &e.ReqTruncated, &e.ReqBytes,
 		&e.RespBody, &e.RespTruncated, &e.RespBytes,
 		&e.Error,
+		&e.ParentID, &e.ChatHash, &e.ParentPrefixLen, &e.MessageCount,
+		&e.ReqText, &e.RespText,
 	)
 	if err != nil {
 		return nil, err
@@ -87,7 +91,7 @@ func (r *LogReader) GetByID(id int64) (*LogEntry, error) {
 
 // GetLatest returns the most recently inserted log entry or sql.ErrNoRows.
 func (r *LogReader) GetLatest() (*LogEntry, error) {
-	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error FROM openai_logs ORDER BY id DESC LIMIT 1"
+	query := "SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error, parent_id, chat_hash, parent_prefix_len, message_count, req_text, resp_text FROM openai_logs ORDER BY id DESC LIMIT 1"
 	var e LogEntry
 	err := r.db.QueryRow(query).Scan(
 		&e.ID, &e.TsStart, &e.TsEnd, &e.DurationMs, &e.ClientIP,
@@ -96,11 +100,60 @@ func (r *LogReader) GetLatest() (*LogEntry, error) {
 		&e.ReqBody, &e.ReqTruncated, &e.ReqBytes,
 		&e.RespBody, &e.RespTruncated, &e.RespBytes,
 		&e.Error,
+		&e.ParentID, &e.ChatHash, &e.ParentPrefixLen, &e.MessageCount,
+		&e.ReqText, &e.RespText,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &e, nil
+}
+
+// GetThreadToSelected returns the ancestor chain from root to the given entry,
+// ordered chronologically (root first). It traverses upward via parent_id
+// using a recursive CTE.
+func (r *LogReader) GetThreadToSelected(id int64) ([]LogEntry, error) {
+	query := `WITH RECURSIVE thread AS (
+		SELECT * FROM openai_logs WHERE id = ?
+		UNION ALL
+		SELECT o.* FROM openai_logs o
+		INNER JOIN thread t ON t.parent_id = o.id
+	)
+	SELECT id, ts_start, ts_end, duration_ms, client_ip, request_method, request_path, upstream_url, status_code, req_headers_json, resp_headers_json, req_body, req_truncated, req_bytes, resp_body, resp_truncated, resp_bytes, error, parent_id, chat_hash, parent_prefix_len, message_count, req_text, resp_text
+	FROM thread ORDER BY id ASC`
+
+	rows, err := r.db.Query(query, id)
+	if err != nil {
+		return nil, fmt.Errorf("querying thread: %w", err)
+	}
+
+	var entries []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		if err := rows.Scan(
+			&e.ID, &e.TsStart, &e.TsEnd, &e.DurationMs, &e.ClientIP,
+			&e.RequestMethod, &e.RequestPath, &e.UpstreamURL, &e.StatusCode,
+			&e.ReqHeadersJSON, &e.RespHeadersJSON,
+			&e.ReqBody, &e.ReqTruncated, &e.ReqBytes,
+			&e.RespBody, &e.RespTruncated, &e.RespBytes,
+			&e.Error,
+			&e.ParentID, &e.ChatHash, &e.ParentPrefixLen, &e.MessageCount,
+			&e.ReqText, &e.RespText,
+		); err != nil {
+			return nil, fmt.Errorf("scanning thread row: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		if closeErr := rows.Close(); closeErr != nil {
+			return nil, fmt.Errorf("iterating thread rows: %w (close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("iterating thread rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing thread rows: %w", err)
+	}
+	return entries, nil
 }
 
 // Count returns total rows matching the filter (for pagination).

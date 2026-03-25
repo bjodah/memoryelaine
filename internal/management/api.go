@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"memoryelaine/internal/chat"
 	"memoryelaine/internal/database"
 	"memoryelaine/internal/query"
 	"memoryelaine/internal/recording"
@@ -126,6 +127,10 @@ func apiLogSubHandler(reader *database.LogReader, previewBytes int) http.Handler
 		parts := strings.Split(path, "/")
 		if len(parts) >= 2 && parts[1] == "body" {
 			handleBody(w, r, reader, previewBytes, parts[0])
+			return
+		}
+		if len(parts) >= 2 && parts[1] == "thread" {
+			handleThread(w, r, reader, parts[0])
 			return
 		}
 		handleDetail(w, r, reader, parts[0])
@@ -405,4 +410,134 @@ func derefStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// handleThread returns the reconstructed conversation thread leading up to (and
+// including) the selected log entry. It uses Top-Down Annotation with backward
+// attribution: the selected entry's req_body.messages defines the canonical
+// conversation, and the CTE ancestor chain is walked backward to attribute
+// each message range to a specific log entry.
+func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogReader, idStr string) {
+	if idStr == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
+		return
+	}
+
+	// Fetch the ancestor chain (root first, selected last).
+	chain, err := reader.GetThreadToSelected(id)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "query_error", "failed to query thread")
+		return
+	}
+	if len(chain) == 0 {
+		writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
+		return
+	}
+
+	// The selected entry is the last element in the chain.
+	selected := chain[len(chain)-1]
+
+	// Parse the selected entry's request messages — this is the canonical
+	// conversation up to this turn.
+	msgs, err := chat.ParseMessages(selected.ReqBody)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "parse_error",
+			"failed to parse selected entry's request messages")
+		return
+	}
+
+	// Build ThreadMessages using backward attribution.
+	threadMsgs := buildThreadMessages(msgs, chain, &selected)
+
+	resp := ThreadResponse{
+		SelectedLogID:      id,
+		SelectedEntryIndex: len(chain) - 1,
+		TotalEntries:       len(chain),
+		Messages:           threadMsgs,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode thread response", "error", err)
+	}
+}
+
+// buildThreadMessages performs backward attribution: walk the CTE chain from
+// the selected entry (last) back toward the root, using parent_prefix_len to
+// determine which messages each entry contributed. Messages without attribution
+// are assigned to the root entry (chain[0]).
+func buildThreadMessages(msgs []chat.Message, chain []database.LogEntry, selected *database.LogEntry) []ThreadMessage {
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	// Each message gets attributed to a log entry.
+	attribution := make([]int64, len(msgs))
+	// Default: attribute all to root.
+	for i := range attribution {
+		attribution[i] = chain[0].ID
+	}
+
+	// Walk backward from the selected entry through the chain, attributing
+	// message ranges. Entry i's messages start at chain[i].ParentPrefixLen
+	// (the number of messages inherited from the parent) and run through
+	// chain[i+1].ParentPrefixLen - 1 (the end of what this entry contributed).
+	// The selected entry's messages run from its ParentPrefixLen to len(msgs)-1.
+	//
+	// We walk backward starting from the selected entry (last in chain).
+	cursor := len(msgs) // end of range (exclusive)
+	for i := len(chain) - 1; i >= 0; i-- {
+		entry := chain[i]
+		start := 0
+		if entry.ParentPrefixLen != nil && *entry.ParentPrefixLen > 0 {
+			start = *entry.ParentPrefixLen
+		}
+		// Clamp to valid range.
+		if start > cursor {
+			start = cursor
+		}
+		for j := start; j < cursor; j++ {
+			if j < len(attribution) {
+				attribution[j] = entry.ID
+			}
+		}
+		cursor = start
+		if cursor <= 0 {
+			break
+		}
+	}
+
+	// Build the output.
+	result := make([]ThreadMessage, 0, len(msgs))
+	for i, m := range msgs {
+		result = append(result, ThreadMessage{
+			Role:    m.Role,
+			Content: chat.ExtractContentString(m.Content),
+			LogID:   attribution[i],
+		})
+	}
+
+	// Append the assistant's response from the selected entry if available.
+	if selected.RespText != nil && *selected.RespText != "" {
+		result = append(result, ThreadMessage{
+			Role:    "assistant",
+			Content: *selected.RespText,
+			LogID:   selected.ID,
+		})
+	} else if selected.RespBody != nil && *selected.RespBody != "" {
+		if respText := chat.ExtractAssistantResponse(*selected.RespBody); respText != "" {
+			result = append(result, ThreadMessage{
+				Role:    "assistant",
+				Content: respText,
+				LogID:   selected.ID,
+			})
+		}
+	}
+
+	return result
 }

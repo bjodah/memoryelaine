@@ -20,6 +20,12 @@ type LogEntry struct {
 	RespTruncated   bool    `json:"resp_truncated" db:"resp_truncated"`
 	RespBytes       int64   `json:"resp_bytes" db:"resp_bytes"`
 	Error           *string `json:"error" db:"error"`
+	ParentID        *int64  `json:"parent_id" db:"parent_id"`
+	ChatHash        *string `json:"chat_hash" db:"chat_hash"`
+	ParentPrefixLen *int    `json:"parent_prefix_len" db:"parent_prefix_len"`
+	MessageCount    *int    `json:"message_count" db:"message_count"`
+	ReqText         *string `json:"req_text" db:"req_text"`
+	RespText        *string `json:"resp_text" db:"resp_text"`
 }
 
 // LogSummary contains only the columns needed for list/table views.

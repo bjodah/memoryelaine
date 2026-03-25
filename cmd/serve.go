@@ -16,6 +16,7 @@ import (
 	"memoryelaine/internal/management"
 	"memoryelaine/internal/proxy"
 	"memoryelaine/internal/recording"
+	"memoryelaine/internal/streamview"
 
 	"github.com/spf13/cobra"
 )
@@ -79,6 +80,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		logClose("writer database", writerDB)
 		logClose("reader database", readerDB)
 		return err
+	}
+	logWriter.SSEExtractor = func(entry *database.LogEntry) string {
+		sv := streamview.Build(entry)
+		if sv.AssembledAvailable {
+			return sv.AssembledBody
+		}
+		return ""
 	}
 
 	writerCtx, writerCancel := context.WithCancel(context.Background())

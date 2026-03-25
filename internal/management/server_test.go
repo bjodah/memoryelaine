@@ -1253,3 +1253,186 @@ func TestAPILogs_SummaryShape(t *testing.T) {
 		}
 	}
 }
+
+// ---------- Thread endpoint tests ----------
+
+func TestThreadEndpoint_SingleEntry(t *testing.T) {
+	deps := setupTestDeps(t)
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}`,
+		ReqBytes:       60,
+		RespBody:       ptr(`{"choices":[{"message":{"content":"Hi there!"}}]}`),
+		RespBytes:      40,
+	})
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var threadResp ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
+		t.Fatal(err)
+	}
+
+	if threadResp.SelectedLogID != 1 {
+		t.Errorf("expected selected_log_id 1, got %d", threadResp.SelectedLogID)
+	}
+	if threadResp.TotalEntries != 1 {
+		t.Errorf("expected total_entries 1, got %d", threadResp.TotalEntries)
+	}
+	// Should have user message + assistant response = 2 messages
+	if len(threadResp.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(threadResp.Messages))
+	}
+	if threadResp.Messages[0].Role != "user" || threadResp.Messages[0].Content != "Hello" {
+		t.Errorf("unexpected first message: %+v", threadResp.Messages[0])
+	}
+	if threadResp.Messages[1].Role != "assistant" || threadResp.Messages[1].Content != "Hi there!" {
+		t.Errorf("unexpected second message: %+v", threadResp.Messages[1])
+	}
+}
+
+func TestThreadEndpoint_MultiTurnChain(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	// Build a 2-turn chain manually with parent linkage.
+	prefixLen := 2
+	msgCount1 := 2
+	msgCount2 := 4
+	parentID := int64(1)
+	chatHash1 := "hash1"
+	chatHash2 := "hash2"
+	reqText1 := "system: Be helpful\nuser: Hello\n"
+	respText1 := "Hi there!"
+
+	insertAndFlush(t, deps,
+		database.LogEntry{
+			TsStart:        1,
+			ClientIP:       "127.0.0.1",
+			RequestMethod:  "POST",
+			RequestPath:    "/v1/chat/completions",
+			UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+			ReqHeadersJSON: "{}",
+			ReqBody:        `{"model":"gpt-4","messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"Hello"}]}`,
+			ReqBytes:       80,
+			RespBody:       ptr(`{"choices":[{"message":{"content":"Hi there!"}}]}`),
+			RespBytes:      40,
+			ChatHash:       &chatHash1,
+			MessageCount:   &msgCount1,
+			ReqText:        &reqText1,
+			RespText:       &respText1,
+		},
+		database.LogEntry{
+			TsStart:         2,
+			ClientIP:        "127.0.0.1",
+			RequestMethod:   "POST",
+			RequestPath:     "/v1/chat/completions",
+			UpstreamURL:     "https://api.openai.com/v1/chat/completions",
+			ReqHeadersJSON:  "{}",
+			ReqBody:         `{"model":"gpt-4","messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there!"},{"role":"user","content":"What is 2+2?"}]}`,
+			ReqBytes:        150,
+			RespBody:        ptr(`{"choices":[{"message":{"content":"4"}}]}`),
+			RespBytes:       30,
+			ParentID:        &parentID,
+			ChatHash:        &chatHash2,
+			ParentPrefixLen: &prefixLen,
+			MessageCount:    &msgCount2,
+		},
+	)
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/2/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var threadResp ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
+		t.Fatal(err)
+	}
+
+	if threadResp.SelectedLogID != 2 {
+		t.Errorf("expected selected_log_id 2, got %d", threadResp.SelectedLogID)
+	}
+	if threadResp.TotalEntries != 2 {
+		t.Errorf("expected total_entries 2, got %d", threadResp.TotalEntries)
+	}
+	if threadResp.SelectedEntryIndex != 1 {
+		t.Errorf("expected selected_entry_index 1, got %d", threadResp.SelectedEntryIndex)
+	}
+
+	// 4 messages from req + 1 assistant response = 5
+	if len(threadResp.Messages) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(threadResp.Messages))
+	}
+
+	// First two messages attributed to entry 1 (the root)
+	if threadResp.Messages[0].LogID != 1 {
+		t.Errorf("msg[0] should be attributed to log 1, got %d", threadResp.Messages[0].LogID)
+	}
+	if threadResp.Messages[1].LogID != 1 {
+		t.Errorf("msg[1] should be attributed to log 1, got %d", threadResp.Messages[1].LogID)
+	}
+	// Messages 2,3 attributed to entry 2
+	if threadResp.Messages[2].LogID != 2 {
+		t.Errorf("msg[2] should be attributed to log 2, got %d", threadResp.Messages[2].LogID)
+	}
+	if threadResp.Messages[3].LogID != 2 {
+		t.Errorf("msg[3] should be attributed to log 2, got %d", threadResp.Messages[3].LogID)
+	}
+	// Assistant response attributed to entry 2
+	if threadResp.Messages[4].LogID != 2 {
+		t.Errorf("msg[4] should be attributed to log 2, got %d", threadResp.Messages[4].LogID)
+	}
+	if threadResp.Messages[4].Content != "4" {
+		t.Errorf("expected assistant response '4', got %q", threadResp.Messages[4].Content)
+	}
+}
+
+func TestThreadEndpoint_NotFound(t *testing.T) {
+	deps := setupTestDeps(t)
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/999/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestThreadEndpoint_InvalidID(t *testing.T) {
+	deps := setupTestDeps(t)
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/abc/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}

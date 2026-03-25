@@ -20,6 +20,7 @@
     (define-key map (kbd "g") #'memoryelaine-show-refresh)
     (define-key map (kbd "v") #'memoryelaine-show-toggle-view)
     (define-key map (kbd "t") #'memoryelaine-show-fetch-full-bodies)
+    (define-key map (kbd "c") #'memoryelaine-show-open-conversation)
     map)
   "Keymap for `memoryelaine-show-mode'.")
 
@@ -171,7 +172,7 @@ FULL is non-nil to fetch the complete body."
 
       ;; Help line
       (insert "\n")
-      (insert (propertize "q:back  g:refresh  v:toggle view  t:load full bodies"
+      (insert (propertize "q:back  g:refresh  v:toggle view  t:load full bodies  c:conversation"
                           'face 'shadow)))
     (goto-char (min pos (point-max)))))
 
@@ -283,6 +284,22 @@ Shows preview/full content with size info, or a placeholder."
         (when (and memoryelaine-state--stream-view
                    (alist-get 'assembled_available memoryelaine-state--stream-view))
           (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "assembled" t))))))
+
+(defun memoryelaine-show-open-conversation ()
+  "Open the conversation/thread view for the current chat entry."
+  (interactive)
+  (let ((entry memoryelaine-state--metadata))
+    (cond
+     ((null entry)
+      (message "memoryelaine: no entry loaded"))
+     ((not (string-suffix-p "/chat/completions"
+                            (or (alist-get 'request_path entry) "")))
+      (message "memoryelaine: conversation view only available for chat/completions"))
+     ((alist-get 'req_truncated entry)
+      (message "memoryelaine: conversation view not available for truncated requests"))
+     (t
+      (require 'memoryelaine-thread)
+      (memoryelaine-thread-open memoryelaine-state--entry-id)))))
 
 ;; --- Formatting helpers ---
 
