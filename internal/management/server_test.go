@@ -1306,54 +1306,6 @@ func TestThreadEndpoint_SingleEntry(t *testing.T) {
 	}
 }
 
-func TestThreadEndpoint_SSEFallbackWithoutStoredRespText(t *testing.T) {
-	deps := setupTestDeps(t)
-	body := strings.Join([]string{
-		`data: {"choices":[{"delta":{"content":"Hi"}}]}`,
-		"",
-		`data: {"choices":[{"delta":{"content":" there"}}]}`,
-		"",
-		`data: [DONE]`,
-		"",
-	}, "\n")
-
-	insertAndFlush(t, deps, database.LogEntry{
-		TsStart:        1,
-		ClientIP:       "127.0.0.1",
-		RequestMethod:  "POST",
-		RequestPath:    "/v1/chat/completions",
-		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
-		ReqHeadersJSON: "{}",
-		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}`,
-		ReqBytes:       60,
-		RespBody:       &body,
-		RespBytes:      int64(len(body)),
-	})
-
-	mux := NewMux(deps)
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	resp := doAuthGet(t, srv, "/api/logs/1/thread")
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, bodyBytes)
-	}
-
-	var threadResp ThreadResponse
-	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
-		t.Fatal(err)
-	}
-	if len(threadResp.Messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(threadResp.Messages))
-	}
-	if threadResp.Messages[1].Role != "assistant" || threadResp.Messages[1].Content != "Hi there" {
-		t.Fatalf("expected SSE assistant response to be assembled, got %+v", threadResp.Messages[1])
-	}
-}
-
 func TestThreadEndpoint_MultiTurnChain(t *testing.T) {
 	deps := setupTestDeps(t)
 

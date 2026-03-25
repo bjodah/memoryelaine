@@ -159,6 +159,8 @@ func (w *LogWriter) drain() {
 	}
 }
 
+const maxPrefixAttempts = 5
+
 // enrichChat populates chat-specific fields (req_text, resp_text, chat_hash,
 // parent_id, parent_prefix_len, message_count) for chat/completions requests.
 func (w *LogWriter) enrichChat(entry *LogEntry) {
@@ -206,10 +208,13 @@ func (w *LogWriter) enrichChat(entry *LogEntry) {
 	}
 	entry.ChatHash = &fullHash
 
-	// Parent lookup: try prefix lengths N-2, N-1, N-3, ... down to 1.
-	// Skip prefix_len <= 0.
+	// Parent lookup: try prefix lengths N-2, N-1, N-3, ... down to 1,
+	// capped at maxPrefixAttempts. Skip prefix_len <= 0.
 	prefixOrder := buildPrefixOrder(n)
-	for _, prefixLen := range prefixOrder {
+	for i, prefixLen := range prefixOrder {
+		if i >= maxPrefixAttempts {
+			break
+		}
 		prefixHash, err := chat.HashPrefix(msgs, prefixLen)
 		if err != nil {
 			continue
