@@ -501,27 +501,27 @@ func (m Model) loadThread(id int64) tea.Cmd {
 			}
 		}
 		for i, m := range msgs {
+			content := chat.ExtractContentString(m.Content)
+			if content == "" {
+				if isComplex, complexity := chat.GetMessageComplexity(m); isComplex {
+					content = fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, attribution[i])
+				} else {
+					content = fmt.Sprintf("[Empty message - view raw log #%d]", attribution[i])
+				}
+			}
 			result = append(result, threadMessage{
 				Role:    m.Role,
-				Content: chat.ExtractContentString(m.Content),
+				Content: content,
 				LogID:   attribution[i],
 			})
 		}
 
-		if selected.RespText != nil && *selected.RespText != "" {
+		if respText := streamview.BestEffortResponseText(&selected); respText != "" {
 			result = append(result, threadMessage{
 				Role:    "assistant",
-				Content: *selected.RespText,
+				Content: respText,
 				LogID:   selected.ID,
 			})
-		} else if selected.RespBody != nil && *selected.RespBody != "" {
-			if rt := chat.ExtractAssistantResponse(*selected.RespBody); rt != "" {
-				result = append(result, threadMessage{
-					Role:    "assistant",
-					Content: rt,
-					LogID:   selected.ID,
-				})
-			}
 		}
 		return threadLoadedMsg{messages: result, logID: id}
 	}

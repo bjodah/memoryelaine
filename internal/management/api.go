@@ -548,37 +548,29 @@ func buildThreadMessages(msgs []chat.Message, chain []database.LogEntry, selecte
 	}
 
 	// Append the assistant's response from the selected entry if available.
-	if selected.RespText != nil && *selected.RespText != "" {
+	if respText := streamview.BestEffortResponseText(selected); respText != "" {
 		result = append(result, ThreadMessage{
 			Role:    "assistant",
-			Content: *selected.RespText,
+			Content: respText,
 			LogID:   selected.ID,
 		})
 	} else if selected.RespBody != nil && *selected.RespBody != "" {
-		if respText := chat.ExtractAssistantResponse(*selected.RespBody); respText != "" {
-			result = append(result, ThreadMessage{
-				Role:    "assistant",
-				Content: respText,
-				LogID:   selected.ID,
-			})
-		} else {
-			// Check if it's complex (e.g. tool calls only)
-			var resp struct {
-				Choices []struct {
-					Message chat.Message `json:"message"`
-				} `json:"choices"`
-			}
-			if err := json.Unmarshal([]byte(*selected.RespBody), &resp); err == nil && len(resp.Choices) > 0 {
-				m := resp.Choices[0].Message
-				if isComplex, complexity := chat.GetMessageComplexity(m); isComplex {
-					result = append(result, ThreadMessage{
-						Role:       "assistant",
-						Content:    fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, selected.ID),
-						LogID:      selected.ID,
-						IsComplex:  true,
-						Complexity: complexity,
-					})
-				}
+		// Check if it's complex (e.g. tool calls only)
+		var resp struct {
+			Choices []struct {
+				Message chat.Message `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(*selected.RespBody), &resp); err == nil && len(resp.Choices) > 0 {
+			m := resp.Choices[0].Message
+			if isComplex, complexity := chat.GetMessageComplexity(m); isComplex {
+				result = append(result, ThreadMessage{
+					Role:       "assistant",
+					Content:    fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, selected.ID),
+					LogID:      selected.ID,
+					IsComplex:  true,
+					Complexity: complexity,
+				})
 			}
 		}
 	}

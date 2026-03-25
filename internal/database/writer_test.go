@@ -278,6 +278,82 @@ func TestWriterChatLineage(t *testing.T) {
 	}
 }
 
+func TestWriterChatLineage_LongTurnFallsBackBeyondFivePrefixes(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenWriter(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, db)
+
+	w, err := NewLogWriter(db, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, w)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.Run(ctx)
+
+	resp1 := `{"choices":[{"message":{"content":"Hi"}}]}`
+	e1 := LogEntry{
+		TsStart:        time.Now().UnixMilli(),
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"Start"}]}`,
+		ReqBytes:       82,
+		RespBody:       &resp1,
+		RespBytes:      34,
+	}
+	if !w.Enqueue(e1) {
+		t.Fatal("enqueue e1 failed")
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	resp2 := `{"choices":[{"message":{"content":"Final answer"}}]}`
+	e2 := LogEntry{
+		TsStart:        time.Now().UnixMilli(),
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody: `{"model":"gpt-4","messages":[
+			{"role":"system","content":"Be helpful"},
+			{"role":"user","content":"Start"},
+			{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"lookup result"},
+			{"role":"assistant","content":"I found the info"},
+			{"role":"assistant","tool_calls":[{"id":"call_2","type":"function","function":{"name":"format","arguments":"{}"}}]},
+			{"role":"tool","tool_call_id":"call_2","content":"formatted result"},
+			{"role":"user","content":"Give me the final answer"}
+		]}`,
+		ReqBytes:  420,
+		RespBody:  &resp2,
+		RespBytes: 43,
+	}
+	if !w.Enqueue(e2) {
+		t.Fatal("enqueue e2 failed")
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	r := NewLogReader(db)
+	entry2, err := r.GetByID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry2.ParentID == nil || *entry2.ParentID != 1 {
+		t.Fatalf("expected parent_id 1 for long turn, got %v", entry2.ParentID)
+	}
+	if entry2.ParentPrefixLen == nil || *entry2.ParentPrefixLen != 2 {
+		t.Fatalf("expected parent_prefix_len 2 for long turn, got %v", entry2.ParentPrefixLen)
+	}
+}
+
 func TestWriterNonChatNotEnriched(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := OpenWriter(dbPath)
