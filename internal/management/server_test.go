@@ -1548,18 +1548,18 @@ func TestThreadEndpoint_SSEAssistantResponse_NoRespText(t *testing.T) {
 	// Insert an entry with an SSE response but NO RespText (e.g. if enrichment was skipped)
 	sseBody := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\ndata: [DONE]\n\n"
 	insertAndFlush(t, deps, database.LogEntry{
-		ID:             1,
-		TsStart:        1,
-		ClientIP:       "127.0.0.1",
-		RequestMethod:  "POST",
-		RequestPath:    "/v1/chat/completions",
-		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
-		ReqHeadersJSON: "{}",
-		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}]}`,
-		ReqBytes:       40,
+		ID:              1,
+		TsStart:         1,
+		ClientIP:        "127.0.0.1",
+		RequestMethod:   "POST",
+		RequestPath:     "/v1/chat/completions",
+		UpstreamURL:     "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON:  "{}",
+		ReqBody:         `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}]}`,
+		ReqBytes:        40,
 		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
-		RespBody:       &sseBody,
-		RespBytes:      int64(len(sseBody)),
+		RespBody:        &sseBody,
+		RespBytes:       int64(len(sseBody)),
 		// RespText is nil
 	})
 

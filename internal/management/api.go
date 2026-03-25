@@ -487,10 +487,7 @@ func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogRe
 		SelectedLogID:      id,
 		SelectedEntryIndex: len(chain) - 1,
 		TotalEntries:       len(chain),
-		Messages:           make([]ThreadMessage, len(threadMsgs)),
-	}
-	for i, m := range threadMsgs {
-		resp.Messages[i] = ThreadMessage(m)
+		Messages:           threadMsgs,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

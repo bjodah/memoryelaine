@@ -1,5 +1,7 @@
 package management
 
+import "memoryelaine/internal/chat"
+
 // LogSummary is the lightweight row returned by the list endpoint.
 // It deliberately omits bodies, headers, and upstream_url.
 type LogSummary struct {
@@ -84,19 +86,10 @@ type APIError struct {
 	Field   string `json:"field,omitempty"`
 }
 
-// ThreadMessage represents one message in a reconstructed conversation thread.
-type ThreadMessage struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	LogID      int64  `json:"log_id"`
-	IsComplex  bool   `json:"is_complex"`
-	Complexity string `json:"complexity,omitempty"`
-}
-
 // ThreadResponse is the envelope for the thread API.
 type ThreadResponse struct {
-	SelectedLogID      int64           `json:"selected_log_id"`
-	SelectedEntryIndex int             `json:"selected_entry_index"`
-	TotalEntries       int             `json:"total_entries"`
-	Messages           []ThreadMessage `json:"messages"`
+	SelectedLogID      int64                `json:"selected_log_id"`
+	SelectedEntryIndex int                  `json:"selected_entry_index"`
+	TotalEntries       int                  `json:"total_entries"`
+	Messages           []chat.ThreadMessage `json:"messages"`
 }
