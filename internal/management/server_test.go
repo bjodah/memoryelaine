@@ -1542,3 +1542,51 @@ func TestThreadEndpoint_ComplexMessagePlaceholder(t *testing.T) {
 		t.Error("expected to find a complex assistant message in thread")
 	}
 }
+
+func TestThreadEndpoint_SSEAssistantResponse_NoRespText(t *testing.T) {
+	deps := setupTestDeps(t)
+	// Insert an entry with an SSE response but NO RespText (e.g. if enrichment was skipped)
+	sseBody := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\ndata: [DONE]\n\n"
+	insertAndFlush(t, deps, database.LogEntry{
+		ID:             1,
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}]}`,
+		ReqBytes:       40,
+		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
+		RespBody:       &sseBody,
+		RespBytes:      int64(len(sseBody)),
+		// RespText is nil
+	})
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var threadResp ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have 2 messages: user and assistant
+	if len(threadResp.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(threadResp.Messages))
+	}
+	if threadResp.Messages[1].Role != "assistant" {
+		t.Errorf("expected second message to be assistant, got %s", threadResp.Messages[1].Role)
+	}
+	if !strings.Contains(threadResp.Messages[1].Content, "Hello world") {
+		t.Errorf("expected assistant content to contain 'Hello world', got %q", threadResp.Messages[1].Content)
+	}
+}

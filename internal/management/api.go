@@ -3,7 +3,6 @@ package management
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -465,13 +464,33 @@ func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogRe
 	}
 
 	// Build ThreadMessages using backward attribution.
-	threadMsgs := buildThreadMessages(msgs, chain, &selected)
+	threadMsgs := chat.BuildThreadMessages(msgs, toThreadEntries(chain), func(id int64) string {
+		// Find the entry in the chain to avoid re-fetching from DB.
+		var entry *database.LogEntry
+		for i := range chain {
+			if chain[i].ID == id {
+				entry = &chain[i]
+				break
+			}
+		}
+		if entry == nil {
+			return ""
+		}
+		sv := streamview.Build(entry)
+		if sv.AssembledAvailable {
+			return sv.AssembledBody
+		}
+		return ""
+	})
 
 	resp := ThreadResponse{
 		SelectedLogID:      id,
 		SelectedEntryIndex: len(chain) - 1,
 		TotalEntries:       len(chain),
-		Messages:           threadMsgs,
+		Messages:           make([]ThreadMessage, len(threadMsgs)),
+	}
+	for i, m := range threadMsgs {
+		resp.Messages[i] = ThreadMessage(m)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -480,108 +499,10 @@ func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogRe
 	}
 }
 
-// buildThreadMessages performs backward attribution: walk the CTE chain from
-// the selected entry (last) back toward the root, using parent_prefix_len to
-// determine which messages each entry contributed. Messages without attribution
-// are assigned to the root entry (chain[0]).
-func buildThreadMessages(msgs []chat.Message, chain []database.LogEntry, selected *database.LogEntry) []ThreadMessage {
-	if len(msgs) == 0 {
-		return nil
+func toThreadEntries(chain []database.LogEntry) []chat.ThreadEntry {
+	res := make([]chat.ThreadEntry, len(chain))
+	for i := range chain {
+		res[i] = chain[i]
 	}
-
-	// Each message gets attributed to a log entry.
-	attribution := make([]int64, len(msgs))
-	// Default: attribute all to root.
-	for i := range attribution {
-		attribution[i] = chain[0].ID
-	}
-
-	// Walk backward from the selected entry through the chain, attributing
-	// message ranges. Entry i's messages start at chain[i].ParentPrefixLen
-	// (the number of messages inherited from the parent) and run through
-	// chain[i+1].ParentPrefixLen - 1 (the end of what this entry contributed).
-	// The selected entry's messages run from its ParentPrefixLen to len(msgs)-1.
-	//
-	// We walk backward starting from the selected entry (last in chain).
-	cursor := len(msgs) // end of range (exclusive)
-	for i := len(chain) - 1; i >= 0; i-- {
-		entry := chain[i]
-		start := 0
-		if entry.ParentPrefixLen != nil && *entry.ParentPrefixLen > 0 {
-			start = *entry.ParentPrefixLen
-		}
-		// Clamp to valid range.
-		if start > cursor {
-			start = cursor
-		}
-		for j := start; j < cursor; j++ {
-			if j < len(attribution) {
-				attribution[j] = entry.ID
-			}
-		}
-		cursor = start
-		if cursor <= 0 {
-			break
-		}
-	}
-
-	// Build the output.
-	result := make([]ThreadMessage, 0, len(msgs))
-	for i, m := range msgs {
-		isComplex, complexity := chat.GetMessageComplexity(m)
-		content := chat.ExtractContentString(m.Content)
-		logID := attribution[i]
-
-		if content == "" && isComplex {
-			content = fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, logID)
-		} else if content == "" && !isComplex {
-			content = fmt.Sprintf("[Empty message - view raw log #%d]", logID)
-		}
-
-		result = append(result, ThreadMessage{
-			Role:       m.Role,
-			Content:    content,
-			LogID:      logID,
-			IsComplex:  isComplex,
-			Complexity: complexity,
-		})
-	}
-
-	// Append the assistant's response from the selected entry if available.
-	if selected.RespText != nil && *selected.RespText != "" {
-		result = append(result, ThreadMessage{
-			Role:    "assistant",
-			Content: *selected.RespText,
-			LogID:   selected.ID,
-		})
-	} else if selected.RespBody != nil && *selected.RespBody != "" {
-		if respText := chat.ExtractAssistantResponse(*selected.RespBody); respText != "" {
-			result = append(result, ThreadMessage{
-				Role:    "assistant",
-				Content: respText,
-				LogID:   selected.ID,
-			})
-		} else {
-			// Check if it's complex (e.g. tool calls only)
-			var resp struct {
-				Choices []struct {
-					Message chat.Message `json:"message"`
-				} `json:"choices"`
-			}
-			if err := json.Unmarshal([]byte(*selected.RespBody), &resp); err == nil && len(resp.Choices) > 0 {
-				m := resp.Choices[0].Message
-				if isComplex, complexity := chat.GetMessageComplexity(m); isComplex {
-					result = append(result, ThreadMessage{
-						Role:       "assistant",
-						Content:    fmt.Sprintf("[Complex message: %s - view raw log #%d]", complexity, selected.ID),
-						LogID:      selected.ID,
-						IsComplex:  true,
-						Complexity: complexity,
-					})
-				}
-			}
-		}
-	}
-
-	return result
+	return res
 }

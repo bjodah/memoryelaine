@@ -35,6 +35,8 @@ type Model struct {
 	thread       []threadMessage
 	threadScroll int
 	threadLogID  int64
+	threadIndex  int
+	threadTotal  int
 	err          error
 	width        int
 	height       int
@@ -61,8 +63,10 @@ type logDetailMsg struct {
 	streamView streamview.Result
 }
 type threadLoadedMsg struct {
-	messages []threadMessage
-	logID    int64
+	messages           []threadMessage
+	logID              int64
+	selectedEntryIndex int
+	totalEntries       int
 }
 type errMsg struct{ err error }
 
@@ -110,6 +114,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case threadLoadedMsg:
 		m.thread = msg.messages
 		m.threadLogID = msg.logID
+		m.threadIndex = msg.selectedEntryIndex
+		m.threadTotal = msg.totalEntries
 		m.threadScroll = 0
 		return m, nil
 
@@ -164,7 +170,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "c":
 			e := m.detail
-			if e != nil && strings.HasSuffix(e.RequestPath, "/chat/completions") && !e.ReqTruncated {
+			if e != nil && chat.IsChatPath(e.RequestPath) && !e.ReqTruncated {
 				m.mode = modeThread
 				return m, m.loadThread(m.detail.ID)
 			}
@@ -254,7 +260,7 @@ func (m Model) tableView() string {
 
 	filterStr := "all"
 	if m.filter.StatusCode != nil {
-		filterStr = strconv.Itoa(*m.filter.StatusCode) + "xx"
+		filterStr = strconv.Itoa(*m.filter.StatusCode)
 	}
 	title := fmt.Sprintf("memoryelaine logs — %d total — filter: %s", m.total, filterStr)
 	b.WriteString(titleStyle.Render(title))
@@ -334,14 +340,14 @@ func (m Model) detailView() string {
 		e.ReqHeadersJSON,
 		"",
 		fmt.Sprintf("─── Request Body (%d bytes%s) ───", e.ReqBytes, truncLabel(e.ReqTruncated)),
-		truncStr(e.ReqBody, 2000),
+		truncStr(e.ReqBody, 10000),
 		"",
 		"─── Response Headers ───",
 		fmtStrPtr(e.RespHeadersJSON),
 		"",
 		fmt.Sprintf("─── Response Body (%d bytes%s) ───", e.RespBytes, truncLabel(e.RespTruncated)),
 		svStatus,
-		truncStr(respBodyContent, 2000),
+		truncStr(respBodyContent, 10000),
 	}
 
 	viewH := m.height - 3
@@ -475,75 +481,55 @@ func (m Model) loadThread(id int64) tea.Cmd {
 			return errMsg{err}
 		}
 
-		var result []threadMessage
-		attribution := make([]int64, len(msgs))
-		for i := range attribution {
-			attribution[i] = chain[0].ID
-		}
-		cursor := len(msgs)
-		for i := len(chain) - 1; i >= 0; i-- {
-			entry := chain[i]
-			start := 0
-			if entry.ParentPrefixLen != nil && *entry.ParentPrefixLen > 0 {
-				start = *entry.ParentPrefixLen
-			}
-			if start > cursor {
-				start = cursor
-			}
-			for j := start; j < cursor; j++ {
-				if j < len(attribution) {
-					attribution[j] = entry.ID
+		threadMsgs := chat.BuildThreadMessages(msgs, toThreadEntries(chain), func(id int64) string {
+			// Find the entry in the chain to avoid re-fetching from DB.
+			var entry *database.LogEntry
+			for i := range chain {
+				if chain[i].ID == id {
+					entry = &chain[i]
+					break
 				}
 			}
-			cursor = start
-			if cursor <= 0 {
-				break
+			if entry == nil {
+				return ""
 			}
-		}
-		for i, m := range msgs {
+			sv := streamview.Build(entry)
+			if sv.AssembledAvailable {
+				return sv.AssembledBody
+			}
+			return ""
+		})
+
+		var result []threadMessage
+		for _, tm := range threadMsgs {
 			result = append(result, threadMessage{
-				Role:    m.Role,
-				Content: chat.ExtractContentString(m.Content),
-				LogID:   attribution[i],
+				Role:    tm.Role,
+				Content: tm.Content,
+				LogID:   tm.LogID,
 			})
 		}
 
-		if selected.RespText != nil && *selected.RespText != "" {
-			result = append(result, threadMessage{
-				Role:    "assistant",
-				Content: *selected.RespText,
-				LogID:   selected.ID,
-			})
-		} else if selected.RespBody != nil && *selected.RespBody != "" {
-			if rt := chat.ExtractAssistantResponse(*selected.RespBody); rt != "" {
-				result = append(result, threadMessage{
-					Role:    "assistant",
-					Content: rt,
-					LogID:   selected.ID,
-				})
-			}
+		return threadLoadedMsg{
+			messages:           result,
+			logID:              id,
+			selectedEntryIndex: len(chain) - 1,
+			totalEntries:       len(chain),
 		}
-		return threadLoadedMsg{messages: result, logID: id}
 	}
+}
+
+func toThreadEntries(chain []database.LogEntry) []chat.ThreadEntry {
+	res := make([]chat.ThreadEntry, len(chain))
+	for i := range chain {
+		res[i] = chain[i]
+	}
+	return res
 }
 
 func (m Model) threadView() string {
 	var b strings.Builder
 
-	entryIndex := 0
-	totalEntries := 0
-	seenLogs := make(map[int64]bool)
-	for _, msg := range m.thread {
-		if !seenLogs[msg.LogID] {
-			seenLogs[msg.LogID] = true
-			totalEntries++
-			if msg.LogID == m.threadLogID {
-				entryIndex = totalEntries
-			}
-		}
-	}
-
-	title := fmt.Sprintf("Conversation to Log #%d (turn %d of %d)", m.threadLogID, entryIndex, totalEntries)
+	title := fmt.Sprintf("Conversation to Log #%d (turn %d of %d)", m.threadLogID, m.threadIndex+1, m.threadTotal)
 	b.WriteString(titleStyle.Render(title))
 	b.WriteString("\n\n")
 
