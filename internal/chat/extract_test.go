@@ -80,3 +80,89 @@ func TestExtractRequestText_ToolCallOnlySkipped(t *testing.T) {
 		t.Errorf("expected empty text for tool-call-only message, got %q", text)
 	}
 }
+
+func TestGetMessageComplexity_ToolCalls(t *testing.T) {
+	m := Message{
+		Role:      "assistant",
+		ToolCalls: json.RawMessage(`[{"id":"call_1"}]`),
+	}
+	isComplex, reason := GetMessageComplexity(m)
+	if !isComplex {
+		t.Error("expected tool_calls message to be complex")
+	}
+	if reason != "tool_calls" {
+		t.Errorf("expected reason 'tool_calls', got %q", reason)
+	}
+}
+
+func TestGetMessageComplexity_FunctionCall(t *testing.T) {
+	m := Message{
+		Role:         "assistant",
+		FunctionCall: json.RawMessage(`{"name":"get_weather"}`),
+	}
+	isComplex, reason := GetMessageComplexity(m)
+	if !isComplex {
+		t.Error("expected function_call message to be complex")
+	}
+	if reason != "function_call" {
+		t.Errorf("expected reason 'function_call', got %q", reason)
+	}
+}
+
+func TestGetMessageComplexity_Multimodal(t *testing.T) {
+	m := Message{
+		Role:    "user",
+		Content: json.RawMessage(`[{"type":"text","text":"Describe"},{"type":"image_url","image_url":{"url":"http://example.com/img.png"}}]`),
+	}
+	isComplex, reason := GetMessageComplexity(m)
+	if !isComplex {
+		t.Error("expected multimodal message to be complex")
+	}
+	if reason != "multimodal:image_url" {
+		t.Errorf("expected reason 'multimodal:image_url', got %q", reason)
+	}
+}
+
+func TestGetMessageComplexity_PlainText(t *testing.T) {
+	m := Message{
+		Role:    "user",
+		Content: json.RawMessage(`"Hello"`),
+	}
+	isComplex, _ := GetMessageComplexity(m)
+	if isComplex {
+		t.Error("plain text message should not be complex")
+	}
+}
+
+func TestGetMessageComplexity_TextOnlyArray(t *testing.T) {
+	m := Message{
+		Role:    "user",
+		Content: json.RawMessage(`[{"type":"text","text":"Hello"}]`),
+	}
+	isComplex, _ := GetMessageComplexity(m)
+	if isComplex {
+		t.Error("text-only array should not be flagged as complex")
+	}
+}
+
+func TestExtractAssistantResponse_NonStreaming(t *testing.T) {
+	resp := `{"choices":[{"message":{"content":"Hello there!"}}]}`
+	text := ExtractAssistantResponse(resp)
+	if text != "Hello there!" {
+		t.Errorf("expected 'Hello there!', got %q", text)
+	}
+}
+
+func TestExtractAssistantResponse_Empty(t *testing.T) {
+	text := ExtractAssistantResponse("")
+	if text != "" {
+		t.Errorf("expected empty, got %q", text)
+	}
+}
+
+func TestExtractAssistantResponse_NoChoices(t *testing.T) {
+	text := ExtractAssistantResponse(`{"choices":[]}`)
+	if text != "" {
+		t.Errorf("expected empty, got %q", text)
+	}
+}

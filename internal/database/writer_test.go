@@ -326,6 +326,62 @@ func TestWriterNonChatNotEnriched(t *testing.T) {
 	}
 }
 
+// Review finding #3: truncated chat requests must NOT be enriched
+func TestWriterTruncatedChatNotEnriched(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenWriter(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, db)
+
+	w, err := NewLogWriter(db, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, w)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.Run(ctx)
+
+	entry := LogEntry{
+		TsStart:        time.Now().UnixMilli(),
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}`,
+		ReqBytes:       60,
+		ReqTruncated:   true,
+	}
+
+	if !w.Enqueue(entry) {
+		t.Fatal("enqueue failed")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	r := NewLogReader(db)
+	e, err := r.GetByID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ChatHash != nil {
+		t.Error("truncated chat request should NOT have chat_hash")
+	}
+	if e.ReqText != nil {
+		t.Error("truncated chat request should NOT have req_text")
+	}
+	if e.MessageCount != nil {
+		t.Error("truncated chat request should NOT have message_count")
+	}
+	if e.ParentID != nil {
+		t.Error("truncated chat request should NOT have parent_id")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
 }

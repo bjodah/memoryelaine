@@ -32,16 +32,15 @@ func canonicalize(m Message) CanonicalMessage {
 		cm.ComplexHash = compactHash(m.ToolCalls)
 	} else if len(m.FunctionCall) > 0 {
 		cm.ComplexHash = compactHash(m.FunctionCall)
-	} else if isComplexContent(m.Content, contentStr) {
+	} else if isComplexContent(m.Content) {
 		cm.ComplexHash = compactHash(m.Content)
 	}
 
 	return cm
 }
 
-// isComplexContent returns true if the content is a JSON array (multimodal)
-// and it contains more than just the text extracted into contentStr.
-func isComplexContent(raw json.RawMessage, contentStr string) bool {
+// isComplexContent returns true if the content is a JSON array (multimodal).
+func isComplexContent(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}

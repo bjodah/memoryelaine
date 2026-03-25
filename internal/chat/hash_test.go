@@ -120,3 +120,56 @@ func TestComplexHash_FunctionCall(t *testing.T) {
 		t.Error("messages with different function_call should hash differently")
 	}
 }
+
+// Tests for review finding #1: multimodal content collision
+func TestComplexHash_MultimodalContent(t *testing.T) {
+	// Two messages with different image URLs but same role should hash differently
+	m1 := Message{
+		Role:    "user",
+		Content: json.RawMessage(`[{"type":"text","text":"Describe"},{"type":"image_url","image_url":{"url":"http://example.com/cat.jpg"}}]`),
+	}
+	m2 := Message{
+		Role:    "user",
+		Content: json.RawMessage(`[{"type":"text","text":"Describe"},{"type":"image_url","image_url":{"url":"http://example.com/dog.jpg"}}]`),
+	}
+	h1, _ := HashMessages([]Message{m1})
+	h2, _ := HashMessages([]Message{m2})
+	if h1 == h2 {
+		t.Error("messages with different image URLs should hash differently due to ComplexHash on multimodal content")
+	}
+}
+
+func TestComplexHash_TextOnlyArray(t *testing.T) {
+	// Text-only array content - should still get ComplexHash but hash must be stable
+	m := Message{
+		Role:    "user",
+		Content: json.RawMessage(`[{"type":"text","text":"Hello"}]`),
+	}
+	h1, _ := HashMessages([]Message{m})
+	h2, _ := HashMessages([]Message{m})
+	if h1 != h2 {
+		t.Error("same text-only array message should hash identically")
+	}
+}
+
+func TestIsComplexContent(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", json.RawMessage{}, false},
+		{"plain string", json.RawMessage(`"hello"`), false},
+		{"array", json.RawMessage(`[{"type":"text","text":"hi"}]`), true},
+		{"multimodal array", json.RawMessage(`[{"type":"image_url","image_url":{}}]`), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isComplexContent(tt.raw)
+			if got != tt.want {
+				t.Errorf("isComplexContent(%q) = %v, want %v", string(tt.raw), got, tt.want)
+			}
+		})
+	}
+}

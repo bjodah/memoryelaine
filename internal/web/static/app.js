@@ -299,7 +299,7 @@
                             logLink.onclick = (e) => {
                                 e.preventDefault();
                                 document.getElementById('conversation-container').classList.add('hidden');
-                                loadDetail(msg.log_id);
+                                showDetail(msg.log_id);
                             };
                             roleEl.appendChild(logLink);
                             roleEl.appendChild(document.createTextNode(')'));

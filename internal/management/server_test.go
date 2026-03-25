@@ -1436,3 +1436,109 @@ func TestThreadEndpoint_InvalidID(t *testing.T) {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
 	}
 }
+
+// Review finding #2: non-chat entries should return 400
+func TestThreadEndpoint_NonChatEntry(t *testing.T) {
+	deps := setupTestDeps(t)
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/embeddings",
+		UpstreamURL:    "https://api.openai.com/v1/embeddings",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"input":"test"}`,
+		ReqBytes:       15,
+	})
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for non-chat entry, got %d", resp.StatusCode)
+	}
+}
+
+// Review finding #2: truncated entries should return 400
+func TestThreadEndpoint_TruncatedEntry(t *testing.T) {
+	deps := setupTestDeps(t)
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}`,
+		ReqBytes:       60,
+		ReqTruncated:   true,
+	})
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 400 {
+		t.Errorf("expected 400 for truncated entry, got %d", resp.StatusCode)
+	}
+}
+
+// Review finding #1: complex messages should have placeholders, not blank content
+func TestThreadEndpoint_ComplexMessagePlaceholder(t *testing.T) {
+	deps := setupTestDeps(t)
+	// Insert an entry with a tool_calls-only assistant message
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://api.openai.com/v1/chat/completions",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{"model":"gpt-4","messages":[{"role":"user","content":"call the weather tool"},{"role":"assistant","tool_calls":[{"id":"call_1","function":{"name":"get_weather","arguments":"{}"}}]},{"role":"tool","content":"sunny","tool_call_id":"call_1"},{"role":"user","content":"thanks"}]}`,
+		ReqBytes:       200,
+		RespBody:       ptr(`{"choices":[{"message":{"content":"You're welcome!"}}]}`),
+		RespBytes:      50,
+	})
+
+	mux := NewMux(deps)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/thread")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var threadResp ThreadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&threadResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// The assistant message with tool_calls should be marked complex
+	// and have a placeholder content, not blank
+	found := false
+	for _, msg := range threadResp.Messages {
+		if msg.IsComplex && msg.Role == "assistant" {
+			found = true
+			if msg.Content == "" {
+				t.Error("complex message should have placeholder content, not empty")
+			}
+			if msg.Complexity != "tool_calls" {
+				t.Errorf("expected complexity 'tool_calls', got %q", msg.Complexity)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected to find a complex assistant message in thread")
+	}
+}
