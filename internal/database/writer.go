@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"memoryelaine/internal/chat"
 )
 
 // LogWriter consumes LogEntry values from a channel and INSERTs them.
@@ -15,6 +17,9 @@ type LogWriter struct {
 	dropped    atomic.Int64
 	insertStmt *sql.Stmt
 	last       lastBodies
+	// SSEExtractor, when set, extracts the assistant text from an SSE
+	// response body. Injected to avoid an import cycle with streamview.
+	SSEExtractor func(entry *LogEntry) string
 }
 
 type bodySnapshot struct {
@@ -35,8 +40,10 @@ const insertSQL = `INSERT INTO openai_logs (
     req_headers_json, resp_headers_json,
     req_body, req_truncated, req_bytes,
     resp_body, resp_truncated, resp_bytes,
-    error
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    error,
+    parent_id, chat_hash, parent_prefix_len, message_count,
+    req_text, resp_text
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // NewLogWriter creates a LogWriter with a bounded channel of given capacity.
 func NewLogWriter(db *sql.DB, queueSize int) (*LogWriter, error) {
@@ -69,6 +76,7 @@ func (w *LogWriter) Run(ctx context.Context) {
 	for {
 		select {
 		case entry := <-w.queue:
+			w.enrichChat(&entry)
 			w.insert(entry)
 		case <-ctx.Done():
 			w.drain()
@@ -131,6 +139,8 @@ func (w *LogWriter) insert(entry LogEntry) {
 		entry.ReqBody, entry.ReqTruncated, entry.ReqBytes,
 		entry.RespBody, entry.RespTruncated, entry.RespBytes,
 		entry.Error,
+		entry.ParentID, entry.ChatHash, entry.ParentPrefixLen, entry.MessageCount,
+		entry.ReqText, entry.RespText,
 	)
 	if err != nil {
 		slog.Error("failed to insert log entry", "error", err)
@@ -141,9 +151,115 @@ func (w *LogWriter) drain() {
 	for {
 		select {
 		case entry := <-w.queue:
+			w.enrichChat(&entry)
 			w.insert(entry)
 		default:
 			return
 		}
 	}
+}
+
+const maxPrefixAttempts = 5
+
+// enrichChat populates chat-specific fields (req_text, resp_text, chat_hash,
+// parent_id, parent_prefix_len, message_count) for chat/completions requests.
+func (w *LogWriter) enrichChat(entry *LogEntry) {
+	if !chat.IsChatPath(entry.RequestPath) {
+		return
+	}
+	if entry.ReqBody == "" || entry.ReqTruncated {
+		return
+	}
+
+	msgs, err := chat.ParseMessages(entry.ReqBody)
+	if err != nil {
+		slog.Debug("chat enrichment: failed to parse request messages", "error", err)
+		return
+	}
+
+	// Sidecar: req_text
+	if reqText := chat.ExtractRequestText(msgs); reqText != "" {
+		entry.ReqText = &reqText
+	}
+
+	// Sidecar: resp_text (try non-streaming JSON first, then SSE assembly)
+	if entry.RespBody != nil && *entry.RespBody != "" && !entry.RespTruncated {
+		if respText := chat.ExtractAssistantResponse(*entry.RespBody); respText != "" {
+			entry.RespText = &respText
+		} else if w.SSEExtractor != nil {
+			if assembled := w.SSEExtractor(entry); assembled != "" {
+				entry.RespText = &assembled
+			}
+		}
+	}
+
+	n := len(msgs)
+	entry.MessageCount = &n
+
+	if n == 0 {
+		return
+	}
+
+	// Compute full conversation hash.
+	fullHash, err := chat.HashMessages(msgs)
+	if err != nil {
+		slog.Debug("chat enrichment: failed to hash messages", "error", err)
+		return
+	}
+	entry.ChatHash = &fullHash
+
+	// Parent lookup: try prefix lengths N-2, N-1, N-3, ... down to 1,
+	// capped at maxPrefixAttempts. Skip prefix_len <= 0.
+	prefixOrder := buildPrefixOrder(n)
+	for i, prefixLen := range prefixOrder {
+		if i >= maxPrefixAttempts {
+			break
+		}
+		prefixHash, err := chat.HashPrefix(msgs, prefixLen)
+		if err != nil {
+			continue
+		}
+		parentID, err := w.findParentByHash(prefixHash)
+		if err != nil {
+			continue
+		}
+		if parentID > 0 {
+			entry.ParentID = &parentID
+			entry.ParentPrefixLen = &prefixLen
+			break
+		}
+	}
+}
+
+// buildPrefixOrder returns the prefix lengths to try: N-2 first (the normal
+// case where the previous turn contributed 2 messages: user + assistant),
+// then N-1, then remaining descending. Skips values <= 0.
+func buildPrefixOrder(n int) []int {
+	seen := make(map[int]bool)
+	var order []int
+	add := func(v int) {
+		if v > 0 && !seen[v] {
+			seen[v] = true
+			order = append(order, v)
+		}
+	}
+	add(n - 2) // Normal: prev turn appended user+assistant
+	add(n - 1) // Single message appended (e.g. user only, or re-send)
+	for i := n - 3; i >= 1; i-- {
+		add(i)
+	}
+	return order
+}
+
+// findParentByHash looks up the most recent entry whose chat_hash matches.
+func (w *LogWriter) findParentByHash(hash string) (int64, error) {
+	var id int64
+	err := w.db.QueryRow(
+		"SELECT id FROM openai_logs WHERE chat_hash = ? ORDER BY id DESC LIMIT 1",
+		hash,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
 }

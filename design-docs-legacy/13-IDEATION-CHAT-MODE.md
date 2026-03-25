@@ -1,0 +1,7 @@
+Attached is memoryelaine a logging inference proxy middleware. I have an idea:
+currently, when browsing data, e.g. via the emacs plugin, it's hard to read, especially the request field. Furthermore, the v1/chat/completions history is often a series of messages where each message is appended to "messages". I see two possible enhancements here:
+Can introduce a special case for v1/chat/completions messages. Where we track the relationship between the requests. We could even maybe deduplicate the storage so that only new entries in the messages array actually need to be explicitly stored in the database entry (along with metadata providing a "pointer" to parent request). This will lead to a linked list kind of storage.
+
+Furthermore, in the emacs client (and tui and web ui), a special mode could be introduced where the links between the requests from the same conversations is presented linearly (or in a tree-view?). An optional view mode specialized for v1/chat/completions conversations would be valuable either way.
+
+Can you write a very detailed IMPLEMENTATION-PLAN-CHAT-SPECIALIZATION.md, listing all the changes that need to be made, to what files, how each file need to be changed, and restate the goal outlined here, along with what choices/compromises have been made in the implementation plan (along with short description of alternative approaches considered and why they were not favored).

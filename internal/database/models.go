@@ -20,7 +20,21 @@ type LogEntry struct {
 	RespTruncated   bool    `json:"resp_truncated" db:"resp_truncated"`
 	RespBytes       int64   `json:"resp_bytes" db:"resp_bytes"`
 	Error           *string `json:"error" db:"error"`
+	ParentID        *int64  `json:"parent_id" db:"parent_id"`
+	ChatHash        *string `json:"chat_hash" db:"chat_hash"`
+	ParentPrefixLen *int    `json:"parent_prefix_len" db:"parent_prefix_len"`
+	MessageCount    *int    `json:"message_count" db:"message_count"`
+	ReqText         *string `json:"req_text" db:"req_text"`
+	RespText        *string `json:"resp_text" db:"resp_text"`
 }
+
+func (e LogEntry) GetID() int64             { return e.ID }
+func (e LogEntry) GetRequestPath() string   { return e.RequestPath }
+func (e LogEntry) GetReqBody() string       { return e.ReqBody }
+func (e LogEntry) IsReqTruncated() bool     { return e.ReqTruncated }
+func (e LogEntry) GetRespBody() *string     { return e.RespBody }
+func (e LogEntry) GetRespText() *string     { return e.RespText }
+func (e LogEntry) GetParentPrefixLen() *int { return e.ParentPrefixLen }
 
 // LogSummary contains only the columns needed for list/table views.
 type LogSummary struct {

@@ -216,6 +216,7 @@
 
             detailContent.innerHTML = `
                 <h2>Log #${entry.id}</h2>
+                ${entry.request_path.endsWith('/chat/completions') && !entry.req_truncated ? '<button id="view-conversation-btn" class="load-body-btn">View Conversation</button>' : ''}
                 <dl>
                     <dt>Time</dt><dd>${formatTime(entry.ts_start)} → ${formatTime(entry.ts_end)}</dd>
                     <dt>Duration</dt><dd>${entry.duration_ms != null ? entry.duration_ms + 'ms' : '—'}</dd>
@@ -235,6 +236,7 @@
                 <h3>Response Body (${formatBytes(entry.resp_bytes)}${entry.resp_truncated ? ' TRUNCATED' : ''})</h3>
                 ${svToggleHTML}
                 <div id="resp-body-container"></div>
+                <div id="conversation-container" class="hidden"></div>
             `;
 
             renderBodySection('req-body-container', 'req');
@@ -266,6 +268,57 @@
                     }
                 });
             });
+
+            // Conversation view button
+            const convBtn = document.getElementById('view-conversation-btn');
+            if (convBtn) {
+                convBtn.addEventListener('click', async () => {
+                    convBtn.disabled = true;
+                    convBtn.textContent = 'Loading…';
+                    try {
+                        const r = await fetch(`/api/logs/${id}/thread`);
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        const thread = await r.json();
+                        const container = document.getElementById('conversation-container');
+                        container.classList.remove('hidden');
+                        container.innerHTML = '';
+
+                        const header = document.createElement('h3');
+                        header.textContent = `Conversation (turn ${thread.selected_entry_index + 1} of ${thread.total_entries})`;
+                        container.appendChild(header);
+
+                        (thread.messages || []).forEach(msg => {
+                            const block = document.createElement('div');
+                            block.className = 'conv-message conv-' + msg.role;
+                            const roleEl = document.createElement('div');
+                            roleEl.className = 'conv-role';
+                            roleEl.textContent = msg.role + ' (';
+                            const logLink = document.createElement('a');
+                            logLink.href = '#';
+                            logLink.textContent = 'Log #' + msg.log_id;
+                            logLink.onclick = (e) => {
+                                e.preventDefault();
+                                document.getElementById('conversation-container').classList.add('hidden');
+                                showDetail(msg.log_id);
+                            };
+                            roleEl.appendChild(logLink);
+                            roleEl.appendChild(document.createTextNode(')'));
+                            block.appendChild(roleEl);
+                            const contentEl = document.createElement('pre');
+                            contentEl.className = 'conv-content';
+                            contentEl.textContent = msg.content;
+                            block.appendChild(contentEl);
+                            container.appendChild(block);
+                        });
+
+                        convBtn.textContent = 'View Conversation';
+                        convBtn.disabled = false;
+                    } catch (e) {
+                        convBtn.textContent = 'Error: ' + e.message;
+                        convBtn.disabled = false;
+                    }
+                });
+            }
 
             detailOverlay.classList.remove('hidden');
         } catch (e) {

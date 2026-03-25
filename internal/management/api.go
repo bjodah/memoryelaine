@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"memoryelaine/internal/chat"
 	"memoryelaine/internal/database"
 	"memoryelaine/internal/query"
 	"memoryelaine/internal/recording"
@@ -126,6 +127,10 @@ func apiLogSubHandler(reader *database.LogReader, previewBytes int) http.Handler
 		parts := strings.Split(path, "/")
 		if len(parts) >= 2 && parts[1] == "body" {
 			handleBody(w, r, reader, previewBytes, parts[0])
+			return
+		}
+		if len(parts) >= 2 && parts[1] == "thread" {
+			handleThread(w, r, reader, parts[0])
 			return
 		}
 		handleDetail(w, r, reader, parts[0])
@@ -405,4 +410,96 @@ func derefStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// handleThread returns the reconstructed conversation thread leading up to (and
+// including) the selected log entry. It uses Top-Down Annotation with backward
+// attribution: the selected entry's req_body.messages defines the canonical
+// conversation, and the CTE ancestor chain is walked backward to attribute
+// each message range to a specific log entry.
+func handleThread(w http.ResponseWriter, r *http.Request, reader *database.LogReader, idStr string) {
+	if idStr == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_id", "log entry ID is required")
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_id", "log entry ID must be an integer")
+		return
+	}
+
+	// Fetch the ancestor chain (root first, selected last).
+	chain, err := reader.GetThreadToSelected(id)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "query_error", "failed to query thread")
+		return
+	}
+	if len(chain) == 0 {
+		writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
+		return
+	}
+
+	// The selected entry is the last element in the chain.
+	selected := chain[len(chain)-1]
+
+	// Guards: Thread view is only available for chat/completions and non-truncated requests.
+	if !chat.IsChatPath(selected.RequestPath) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_type",
+			"thread view is only available for /v1/chat/completions requests")
+		return
+	}
+	if selected.ReqTruncated {
+		writeAPIError(w, http.StatusBadRequest, "truncated",
+			"thread view is not available for truncated requests")
+		return
+	}
+
+	// Parse the selected entry's request messages — this is the canonical
+	// conversation up to this turn.
+	msgs, err := chat.ParseMessages(selected.ReqBody)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "parse_error",
+			"failed to parse selected entry's request messages")
+		return
+	}
+
+	// Build ThreadMessages using backward attribution.
+	threadMsgs := chat.BuildThreadMessages(msgs, toThreadEntries(chain), func(id int64) string {
+		// Find the entry in the chain to avoid re-fetching from DB.
+		var entry *database.LogEntry
+		for i := range chain {
+			if chain[i].ID == id {
+				entry = &chain[i]
+				break
+			}
+		}
+		if entry == nil {
+			return ""
+		}
+		sv := streamview.Build(entry)
+		if sv.AssembledAvailable {
+			return sv.AssembledBody
+		}
+		return ""
+	})
+
+	resp := ThreadResponse{
+		SelectedLogID:      id,
+		SelectedEntryIndex: len(chain) - 1,
+		TotalEntries:       len(chain),
+		Messages:           threadMsgs,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode thread response", "error", err)
+	}
+}
+
+func toThreadEntries(chain []database.LogEntry) []chat.ThreadEntry {
+	res := make([]chat.ThreadEntry, len(chain))
+	for i := range chain {
+		res[i] = chain[i]
+	}
+	return res
 }

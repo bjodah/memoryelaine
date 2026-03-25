@@ -43,6 +43,7 @@ func insertTestEntries(t *testing.T, db *sql.DB, n int) {
 			`{"prompt":"test"}`, false, 17,
 			`{"text":"hello"}`, false, 16,
 			nil,
+			nil, nil, nil, nil, nil, nil,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -210,6 +211,7 @@ func TestReaderQuery_FTSSearch(t *testing.T) {
 		`{"prompt":"tell me about unicorn"}`, false, 30,
 		`{"text":"response one"}`, false, 20,
 		nil,
+		nil, nil, nil, nil, nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +224,7 @@ func TestReaderQuery_FTSSearch(t *testing.T) {
 		`{"prompt":"something else"}`, false, 25,
 		`{"text":"here be dragon"}`, false, 22,
 		nil,
+		nil, nil, nil, nil, nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +237,7 @@ func TestReaderQuery_FTSSearch(t *testing.T) {
 		`{"prompt":"boring"}`, false, 18,
 		`{"text":"nothing special"}`, false, 24,
 		nil,
+		nil, nil, nil, nil, nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -321,5 +325,102 @@ func TestReaderQuery_FTSSpecialChars(t *testing.T) {
 		if err != nil {
 			t.Errorf("FTS query with %q should not error, got: %v", q, err)
 		}
+	}
+}
+
+func TestGetThreadToSelected(t *testing.T) {
+	db := setupTestDB(t)
+	defer mustClose(t, db)
+
+	// Insert a 3-entry chain: root(1) -> middle(2) -> leaf(3)
+	chatHash1 := "hash_abc"
+	chatHash2 := "hash_def"
+	chatHash3 := "hash_ghi"
+	now := time.Now().UnixMilli()
+	parentPrefixLen2 := 2
+	parentPrefixLen3 := 4
+	msgCount1 := 2
+	msgCount2 := 4
+	msgCount3 := 6
+
+	stmt, err := db.Prepare(insertSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, stmt)
+
+	code := 200
+
+	// Entry 1: root (no parent)
+	if _, err := stmt.Exec(
+		now, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hi"}]}`, false, 50,
+		`{"choices":[{"message":{"content":"hello"}}]}`, false, 40,
+		nil,
+		nil, &chatHash1, nil, &msgCount1, nil, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry 2: parent is 1
+	parentID2 := int64(1)
+	if _, err := stmt.Exec(
+		now+1, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"what?"}]}`, false, 100,
+		`{"choices":[{"message":{"content":"nothing"}}]}`, false, 40,
+		nil,
+		&parentID2, &chatHash2, &parentPrefixLen2, &msgCount2, nil, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry 3: parent is 2
+	parentID3 := int64(2)
+	if _, err := stmt.Exec(
+		now+2, nil, nil, "127.0.0.1",
+		"POST", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions", &code,
+		"{}", "{}",
+		`{"messages":[{"role":"system","content":"sys"},{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"what?"},{"role":"assistant","content":"nothing"},{"role":"user","content":"ok"}]}`, false, 150,
+		`{"choices":[{"message":{"content":"bye"}}]}`, false, 30,
+		nil,
+		&parentID3, &chatHash3, &parentPrefixLen3, &msgCount3, nil, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewLogReader(db)
+
+	// Thread to entry 3 should return [1, 2, 3] (root first)
+	chain, err := r.GetThreadToSelected(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 3 {
+		t.Fatalf("expected 3 entries in thread, got %d", len(chain))
+	}
+	if chain[0].ID != 1 || chain[1].ID != 2 || chain[2].ID != 3 {
+		t.Errorf("expected IDs [1,2,3], got [%d,%d,%d]", chain[0].ID, chain[1].ID, chain[2].ID)
+	}
+
+	// Thread to entry 1 (root) should return just [1]
+	chain, err = r.GetThreadToSelected(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 1 {
+		t.Fatalf("expected 1 entry for root, got %d", len(chain))
+	}
+
+	// Thread to nonexistent entry should return empty
+	chain, err = r.GetThreadToSelected(999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 0 {
+		t.Errorf("expected 0 entries for nonexistent ID, got %d", len(chain))
 	}
 }

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"memoryelaine/internal/chat"
 	"memoryelaine/internal/database"
 	"memoryelaine/internal/streamview"
 )
@@ -18,27 +19,39 @@ type viewMode int
 const (
 	modeTable viewMode = iota
 	modeDetail
+	modeThread
 )
 
 type Model struct {
-	mode       viewMode
-	reader     *database.LogReader
-	filter     database.QueryFilter
-	entries    []database.LogSummary
-	total      int64
-	cursor     int
-	detail     *database.LogEntry
-	streamView streamViewState
-	scroll     int
-	err        error
-	width      int
-	height     int
-	quit       bool
+	mode         viewMode
+	reader       *database.LogReader
+	filter       database.QueryFilter
+	entries      []database.LogSummary
+	total        int64
+	cursor       int
+	detail       *database.LogEntry
+	streamView   streamViewState
+	scroll       int
+	thread       []threadMessage
+	threadScroll int
+	threadLogID  int64
+	threadIndex  int
+	threadTotal  int
+	err          error
+	width        int
+	height       int
+	quit         bool
 }
 
 type streamViewState struct {
 	mode   streamview.Mode
 	result streamview.Result
+}
+
+type threadMessage struct {
+	Role    string
+	Content string
+	LogID   int64
 }
 
 type logsLoadedMsg struct {
@@ -48,6 +61,12 @@ type logsLoadedMsg struct {
 type logDetailMsg struct {
 	entry      *database.LogEntry
 	streamView streamview.Result
+}
+type threadLoadedMsg struct {
+	messages           []threadMessage
+	logID              int64
+	selectedEntryIndex int
+	totalEntries       int
 }
 type errMsg struct{ err error }
 
@@ -92,6 +111,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
+	case threadLoadedMsg:
+		m.thread = msg.messages
+		m.threadLogID = msg.logID
+		m.threadIndex = msg.selectedEntryIndex
+		m.threadTotal = msg.totalEntries
+		m.threadScroll = 0
+		return m, nil
+
 	case errMsg:
 		m.err = msg.err
 		return m, nil
@@ -100,6 +127,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == modeThread {
+		switch msg.String() {
+		case "esc", "q":
+			m.mode = modeDetail
+			m.thread = nil
+			return m, nil
+		case "j", "down":
+			m.threadScroll++
+			return m, nil
+		case "k", "up":
+			if m.threadScroll > 0 {
+				m.threadScroll--
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
 	if m.mode == modeDetail {
 		switch msg.String() {
 		case "esc", "q":
@@ -121,6 +166,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.streamView.mode = streamview.ModeRaw
 				}
+			}
+			return m, nil
+		case "c":
+			e := m.detail
+			if e != nil && chat.IsChatPath(e.RequestPath) && !e.ReqTruncated {
+				m.mode = modeThread
+				return m, m.loadThread(m.detail.ID)
 			}
 			return m, nil
 		}
@@ -184,6 +236,9 @@ func (m Model) View() string {
 	if m.quit {
 		return ""
 	}
+	if m.mode == modeThread && m.thread != nil {
+		return m.threadView()
+	}
 	if m.mode == modeDetail && m.detail != nil {
 		return m.detailView()
 	}
@@ -205,7 +260,7 @@ func (m Model) tableView() string {
 
 	filterStr := "all"
 	if m.filter.StatusCode != nil {
-		filterStr = strconv.Itoa(*m.filter.StatusCode) + "xx"
+		filterStr = strconv.Itoa(*m.filter.StatusCode)
 	}
 	title := fmt.Sprintf("memoryelaine logs — %d total — filter: %s", m.total, filterStr)
 	b.WriteString(titleStyle.Render(title))
@@ -285,14 +340,14 @@ func (m Model) detailView() string {
 		e.ReqHeadersJSON,
 		"",
 		fmt.Sprintf("─── Request Body (%d bytes%s) ───", e.ReqBytes, truncLabel(e.ReqTruncated)),
-		truncStr(e.ReqBody, 2000),
+		truncStr(e.ReqBody, 10000),
 		"",
 		"─── Response Headers ───",
 		fmtStrPtr(e.RespHeadersJSON),
 		"",
 		fmt.Sprintf("─── Response Body (%d bytes%s) ───", e.RespBytes, truncLabel(e.RespTruncated)),
 		svStatus,
-		truncStr(respBodyContent, 2000),
+		truncStr(respBodyContent, 10000),
 	}
 
 	viewH := m.height - 3
@@ -316,7 +371,7 @@ func (m Model) detailView() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view"))
+	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view  c:conversation"))
 	return b.String()
 }
 
@@ -412,4 +467,114 @@ func fmtStatusPtr(s *int) string {
 		return strconv.Itoa(*s)
 	}
 	return "—"
+}
+
+func (m Model) loadThread(id int64) tea.Cmd {
+	return func() tea.Msg {
+		chain, err := m.reader.GetThreadToSelected(id)
+		if err != nil || len(chain) == 0 {
+			return errMsg{err}
+		}
+		selected := chain[len(chain)-1]
+		msgs, err := chat.ParseMessages(selected.ReqBody)
+		if err != nil {
+			return errMsg{err}
+		}
+
+		threadMsgs := chat.BuildThreadMessages(msgs, toThreadEntries(chain), func(id int64) string {
+			// Find the entry in the chain to avoid re-fetching from DB.
+			var entry *database.LogEntry
+			for i := range chain {
+				if chain[i].ID == id {
+					entry = &chain[i]
+					break
+				}
+			}
+			if entry == nil {
+				return ""
+			}
+			sv := streamview.Build(entry)
+			if sv.AssembledAvailable {
+				return sv.AssembledBody
+			}
+			return ""
+		})
+
+		var result []threadMessage
+		for _, tm := range threadMsgs {
+			result = append(result, threadMessage{
+				Role:    tm.Role,
+				Content: tm.Content,
+				LogID:   tm.LogID,
+			})
+		}
+
+		return threadLoadedMsg{
+			messages:           result,
+			logID:              id,
+			selectedEntryIndex: len(chain) - 1,
+			totalEntries:       len(chain),
+		}
+	}
+}
+
+func toThreadEntries(chain []database.LogEntry) []chat.ThreadEntry {
+	res := make([]chat.ThreadEntry, len(chain))
+	for i := range chain {
+		res[i] = chain[i]
+	}
+	return res
+}
+
+func (m Model) threadView() string {
+	var b strings.Builder
+
+	title := fmt.Sprintf("Conversation to Log #%d (turn %d of %d)", m.threadLogID, m.threadIndex+1, m.threadTotal)
+	b.WriteString(titleStyle.Render(title))
+	b.WriteString("\n\n")
+
+	var lines []string
+	for _, msg := range m.thread {
+		roleLabel := msg.Role
+		var style lipgloss.Style
+		switch msg.Role {
+		case "user":
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+		case "assistant":
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+		case "system", "developer":
+			style = lipgloss.NewStyle().Faint(true)
+		default:
+			style = lipgloss.NewStyle()
+		}
+		header := style.Bold(true).Render(fmt.Sprintf("── %s (Log #%d) ──", roleLabel, msg.LogID))
+		lines = append(lines, header)
+		for _, l := range strings.Split(msg.Content, "\n") {
+			lines = append(lines, style.Render(l))
+		}
+		lines = append(lines, "")
+	}
+
+	viewH := m.height - 5
+	if viewH < 5 {
+		viewH = 20
+	}
+	scroll := m.threadScroll
+	if scroll >= len(lines)-viewH {
+		scroll = len(lines) - viewH
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := scroll + viewH
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for _, l := range lines[scroll:end] {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+
+	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll"))
+	return b.String()
 }
