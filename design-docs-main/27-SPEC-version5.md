@@ -1,4 +1,4 @@
-# Product Specification v3: `memoryelaine`
+# Product Specification v5: `memoryelaine`
 
 ## 1. Overview
 
@@ -23,6 +23,12 @@ with:
 - `Assembled`: reconstructed text for supported streamed endpoints, including a
   partial-warning state when recovery is possible from an interrupted stream
 
+For `/v1/chat/completions` traffic, the system provides a **conversation view**
+that renders the request's message history as a readable thread. The writer
+extracts sidecar text for FTS indexing and computes deterministic lineage
+hashes to link multi-turn conversations. Viewers can display the
+root-to-selected conversation chain with per-turn attribution.
+
 ## 2. Goals
 
 - Proxy requests to a single configured upstream base URL.
@@ -32,6 +38,10 @@ with:
 - Provide local inspection tools for raw captured traffic.
 - Provide a readable assembled view for supported streamed responses in the TUI
   and Web UI without changing database storage format.
+- Improve FTS for `/v1/chat/completions` by indexing extracted text instead of
+  raw SSE fragments.
+- Provide a conversation-oriented view for `/v1/chat/completions` traffic
+  across all frontends (TUI, Web UI, Emacs).
 
 ## 3. Non-Goals
 
@@ -39,9 +49,11 @@ with:
 - TLS termination inside `memoryelaine`.
 - Upstream authentication management or API key injection.
 - Modification of proxied request or response bytes.
-- Persisting assembled stream output as a separate database representation.
 - Broad first-version support for every possible OpenAI-compatible streaming
   dialect.
+- Storage deduplication across log entries.
+- Descendant traversal or branch exploration in conversation view.
+- Backward-compatible migration for existing SQLite files.
 
 ## 4. Core Commands
 
@@ -102,6 +114,13 @@ For captured paths, response streaming must remain pass-through in behavior:
 
 If logging fails, the proxy must fail open and continue serving the client.
 
+### 5.5 SSE Extractor Injection
+
+The writer uses an injected `SSEExtractor` function to extract assembled text
+from streamed responses. This callback is set during `serve` initialization and
+delegates to the `streamview.Build` function. The injection avoids an import
+cycle between the `database` and `streamview` packages.
+
 ## 6. Data Capture and Logging
 
 ### 6.1 Capture Strategy
@@ -141,7 +160,12 @@ If the queue is full:
 - the dropped-log counter increases
 - an application error is logged to structured stdout
 
-### 6.4 Last Captured Bodies and Staleness
+### 6.4 Chat Enrichment
+
+Before inserting a log entry, the writer performs chat-specific enrichment for
+`/v1/chat/completions` requests. This is described fully in §14.
+
+### 6.5 Last Captured Bodies and Staleness
 
 The service maintains in-memory "last captured request body" and "last captured
 response body" values for the `/last-request` and `/last-response` endpoints.
@@ -153,7 +177,7 @@ replaces the corresponding stored value.
 When stale, the endpoint must clearly label the returned plain-text value as
 stale.
 
-### 6.5 Redaction
+### 6.6 Redaction
 
 The following headers must be removed before storing request or response headers
 in the database:
@@ -162,12 +186,11 @@ in the database:
 - `Cookie`
 - `Set-Cookie`
 
-### 6.6 Raw Storage Is Canonical
+### 6.7 Raw Storage Is Canonical
 
-The database stores raw captured request and response bodies only. No assembled
-stream representation is stored in SQLite.
-
-Derived assembled views are computed at read/render time by supported viewers.
+The database stores raw captured request and response bodies as the canonical
+record. Derived sidecar text (§8.2) is stored alongside for FTS indexing but
+does not replace the raw bodies.
 
 ## 7. Stream View Mode
 
@@ -187,7 +210,7 @@ Supported viewers may offer:
 
 ### 7.3 Scope of Assembled Mode
 
-The first supported paths are:
+The supported paths are:
 
 - `/v1/chat/completions`
 - `/v1/completions`
@@ -211,8 +234,8 @@ If any of these conditions fail, viewers must fall back to `Raw`.
 For `/v1/chat/completions`:
 
 - assemble text from streamed `choices[0].delta.content` fragments
-- reject multi-choice streams as unsupported in v3
-- reject tool-call / function-call streams as unsupported in v3
+- reject multi-choice streams as unsupported
+- reject tool-call / function-call streams as unsupported
 - handle empty `choices` arrays (e.g. usage-only chunks) by skipping the event
 - handle `choices[0].delta.content` being JSON `null` or absent by skipping
   the event
@@ -220,11 +243,11 @@ For `/v1/chat/completions`:
 For `/v1/completions`:
 
 - assemble text from streamed `choices[0].text` fragments
-- reject multi-choice streams as unsupported in v3
+- reject multi-choice streams as unsupported
 - handle empty `choices` arrays by skipping the event
 - handle `choices[0].text` being JSON `null` or absent by skipping the event
 
-In v3, assembled rendering is defined only for single-choice text streams.
+Assembled rendering is defined only for single-choice text streams.
 
 If the stream parses completely but yields no text content (e.g. role-only or
 usage-only deltas), assembled mode is unavailable and the viewer falls back to
@@ -241,13 +264,13 @@ Stream view mode is required in:
 - the Terminal UI
 - the Web UI
 
-It is not required in `memoryelaine log` in v3.
+It is not required in `memoryelaine log`.
 
 ## 8. Database
 
 ### 8.1 Storage Engine
 
-SQLite is the sole supported database in v3.
+SQLite is the sole supported database.
 
 Every process connecting to the database must use WAL-compatible settings to
 allow concurrent reads while the proxy is writing.
@@ -273,20 +296,93 @@ CREATE TABLE IF NOT EXISTS openai_logs (
     resp_body TEXT,
     resp_truncated BOOLEAN DEFAULT 0,
     resp_bytes INTEGER,
-    error TEXT
+    error TEXT,
+    parent_id INTEGER REFERENCES openai_logs(id),
+    chat_hash TEXT,
+    parent_prefix_len INTEGER,
+    message_count INTEGER,
+    req_text TEXT,
+    resp_text TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ts_start ON openai_logs(ts_start);
 CREATE INDEX IF NOT EXISTS idx_status_code_ts ON openai_logs(status_code, ts_start);
 CREATE INDEX IF NOT EXISTS idx_path_ts ON openai_logs(request_path, ts_start);
+CREATE INDEX IF NOT EXISTS idx_chat_hash ON openai_logs(chat_hash);
+CREATE INDEX IF NOT EXISTS idx_parent_id ON openai_logs(parent_id);
 ```
 
-Interpretation:
+Column interpretation:
 
 - `req_bytes` and `resp_bytes` count body bytes only
 - `status_code` may be null when an upstream error occurs before a response is
   available
 - `resp_body` contains the raw captured response body, not an assembled view
+- `parent_id` references the parent log entry in a conversation chain (§14.4)
+- `chat_hash` is the SHA-256 hex of the canonicalized message array (§14.3)
+- `parent_prefix_len` records how many messages matched the parent request
+- `message_count` records total messages in this request
+- `req_text` is extracted searchable text for chat endpoints; `NULL` otherwise
+- `resp_text` is extracted assistant response text; `NULL` otherwise
+
+### 8.3 Full-Text Search
+
+FTS5 is used for full-text search across request and response content.
+
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS openai_logs_fts USING fts5(
+    req_text,
+    resp_text,
+    content='openai_logs',
+    content_rowid='id'
+);
+```
+
+FTS triggers use `COALESCE` so that `NULL` sidecar columns fall back to the
+raw body for indexing. This ensures all endpoints remain searchable without
+duplicating raw bodies into the sidecar columns:
+
+```sql
+CREATE TRIGGER IF NOT EXISTS openai_logs_ai AFTER INSERT ON openai_logs BEGIN
+    INSERT INTO openai_logs_fts(rowid, req_text, resp_text)
+    VALUES (new.id,
+            COALESCE(new.req_text, new.req_body),
+            COALESCE(new.resp_text, new.resp_body));
+END;
+
+CREATE TRIGGER IF NOT EXISTS openai_logs_ad AFTER DELETE ON openai_logs BEGIN
+    INSERT INTO openai_logs_fts(openai_logs_fts, rowid, req_text, resp_text)
+    VALUES ('delete', old.id,
+            COALESCE(old.req_text, old.req_body),
+            COALESCE(old.resp_text, old.resp_body));
+END;
+```
+
+No `AFTER UPDATE` trigger is required because rows are insert-only after
+capture.
+
+### 8.4 FTS Rebuild
+
+The built-in FTS5 `'rebuild'` command bypasses triggers and reads columns
+directly from the content table. With `NULL` sidecar columns, a rebuild would
+silently drop non-chat entries from the FTS index.
+
+Instead, the rebuild uses a manual equivalent that applies `COALESCE`:
+
+```sql
+DELETE FROM openai_logs_fts;
+INSERT INTO openai_logs_fts(rowid, req_text, resp_text)
+    SELECT id, COALESCE(req_text, req_body), COALESCE(resp_text, resp_body)
+    FROM openai_logs;
+```
+
+This is executed within a transaction.
+
+### 8.5 Rollout Constraint
+
+`CREATE TABLE IF NOT EXISTS` does not upgrade an old database in place. Rollout
+for v5 requires a fresh database file. This is acceptable and should be stated
+in deployment notes.
 
 ## 9. Configuration
 
@@ -369,6 +465,10 @@ Basic Auth is required for all management endpoints except `/health`.
   `mode` (raw|assembled, default: raw), and `full` (true|false, default:
   false) query parameters. Body previews are limited to
   `management.preview_bytes` (default: 65536) unless `full=true`.
+- `GET /api/logs/{id}/thread`
+  Conversation thread for a `/v1/chat/completions` log entry. Returns the
+  linear ancestor chain from root to the selected entry with per-message
+  attribution. See §10.8.
 - `GET /api/recording`
   Authenticated JSON endpoint returning the current runtime recording state.
 - `PUT /api/recording`
@@ -562,6 +662,75 @@ and returns the new state in the same response shape.
 }
 ```
 
+### 10.8 `/api/logs/{id}/thread`
+
+Returns the conversation thread for a `/v1/chat/completions` log entry.
+
+**Guards:**
+
+- If the log entry does not exist: `404 Not Found`
+- If the log entry ID is not a valid integer: `400 Bad Request`
+- If the log entry's `request_path` does not end with `/chat/completions`:
+  `400 Bad Request` with message "thread view is only available for
+  /v1/chat/completions requests"
+- If `req_truncated == true`: `400 Bad Request` with message "thread view is
+  not available for truncated requests"
+
+**Response shape:**
+
+```json
+{
+  "selected_log_id": 42,
+  "selected_entry_index": 6,
+  "total_entries": 7,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant.",
+      "log_id": 36,
+      "is_complex": false,
+      "complexity": ""
+    },
+    {
+      "role": "user",
+      "content": "Hello!",
+      "log_id": 36,
+      "is_complex": false,
+      "complexity": ""
+    },
+    {
+      "role": "assistant",
+      "content": "Hi there! How can I help?",
+      "log_id": 36,
+      "is_complex": false,
+      "complexity": ""
+    }
+  ]
+}
+```
+
+**Definition of entry index:** `selected_entry_index` and `total_entries` count
+log entries in the ancestor chain, not individual messages. A root entry
+containing `[system, user]` plus its assistant response is entry 0 (one entry),
+regardless of how many messages it contains. The API uses 0-based indexing;
+frontends display 1-based values (e.g., "turn 7 of 7").
+
+**Message-level fields:**
+
+- `log_id` links each message back to its originating log entry for raw-log
+  navigation
+- `is_complex` indicates whether the message contains structured content
+  (tool calls, function calls, or multimodal content)
+- `complexity` provides a machine-readable reason when `is_complex` is true:
+  `"tool_calls"`, `"function_call"`, or `"multimodal:{type}"`
+- Complex messages receive a placeholder `content` such as
+  `"[tool_calls — view raw Log #N]"` rather than blank content
+
+**Orphan entries:** If a chat entry has no parent, the endpoint returns a valid
+1-entry thread with `selected_entry_index = 0` and `total_entries = 1`.
+
+The assembly algorithm is described in §14.5.
+
 ## 11. CLI Behavior
 
 ### 11.1 `memoryelaine log`
@@ -625,8 +794,16 @@ Required detail behavior:
   `Assembled`
 - if the assembled result is partial, display a clear warning state
 
-The v3 TUI does not require arbitrary text search, path filters, or time-range
-editing from inside the terminal UI.
+### 12.1 Conversation View
+
+The TUI provides a conversation view for `/v1/chat/completions` log entries:
+
+- press `c` in detail view to open conversation mode
+- `c` is only available for chat completion entries that are not truncated
+- the view renders messages with role-colored headers and `Log #N` attribution
+- displays selected position in the title (1-based: "turn 7 of 7")
+- press `esc` or `q` to return to detail view
+- scroll with `j`/`k`
 
 ## 13. Web UI Behavior
 
@@ -648,28 +825,294 @@ Required capabilities:
 - when assembled mode is partial, show a warning state without rendering the
   content as HTML
 
-## 14. Observability and Security
+### 13.1 Conversation View
 
-### 14.1 Application Logging
+The detail overlay includes a `View Conversation` button for
+`/v1/chat/completions` entries that are not truncated:
+
+- clicking the button fetches `/api/logs/{id}/thread` and renders conversation
+  blocks inline
+- each message is styled by role (`user`, `assistant`, `system`, `developer`)
+- `Log #N` links are clickable and navigate to the raw log detail for that
+  entry
+- a clear switch returns to the raw request/response panes
+
+## 14. Chat Specialization
+
+### 14.1 Scope
+
+Chat specialization applies only to `/v1/chat/completions` requests. The
+determination is made by checking whether the request path ends with
+`/chat/completions`.
+
+### 14.2 Sidecar Text
+
+Two nullable sidecar columns hold derived searchable text:
+
+- `req_text` — populated only for `/v1/chat/completions` where extracted text
+  differs from `req_body`. `NULL` otherwise.
+- `resp_text` — populated only when extracted text differs from `resp_body`
+  (streamed or non-streamed chat responses with extractable text). `NULL`
+  otherwise.
+
+FTS indexes use `COALESCE(req_text, req_body)` and
+`COALESCE(resp_text, resp_body)`, so all endpoints remain searchable without
+duplicating raw bodies into the sidecar columns.
+
+**Critical guardrail:** Sidecar columns use `*string` pointers in Go. When
+sidecar text is not generated, these remain `nil`, never `""`. An empty string
+would cause `COALESCE` to evaluate to `""`, silently erasing that entry from
+the FTS index.
+
+### 14.3 Canonical Message Hashing
+
+For lineage tracking, the system hashes a canonicalized form of the request
+messages using SHA-256.
+
+Each message is canonicalized as:
+
+```go
+type CanonicalMessage struct {
+    Role        string `json:"role"`
+    Content     string `json:"content,omitempty"`
+    ComplexHash string `json:"complex_hash,omitempty"`
+}
+```
+
+**Canonicalization rules:**
+
+1. Always include `role`.
+2. If `content` is a plain JSON string, store the text directly.
+3. If `content` is a text-only array, flatten the text parts.
+4. If the message is structurally complex (has `tool_calls`, `function_call`,
+   or multimodal content array), compute `ComplexHash` as described below.
+5. Request-level fields (`model`, `temperature`, `tools`, etc.) are ignored.
+
+**ComplexHash:** When a message contains structured content that cannot be
+represented as plain text, collision resistance is preserved by computing a
+SHA-256 hash of the raw bytes:
+
+1. Collect the raw `json.RawMessage` fields that triggered the complex
+   classification (`tool_calls`, `function_call`, or content array).
+2. Apply `json.Compact` to normalize whitespace.
+3. Concatenate the compacted bytes in deterministic order.
+4. Compute SHA-256, store as lowercase hex in `ComplexHash`.
+
+**Multimodal content detection:** Content fields that are JSON arrays (starting
+with `[`) are treated as multimodal and receive ComplexHash treatment. This
+covers `image_url`, `audio`, and any future content part types without
+requiring per-type parsing.
+
+**Hash functions:**
+
+- `HashMessages(msgs)` — SHA-256 of the full canonicalized message array
+- `HashPrefix(msgs, n)` — SHA-256 of the first `n` canonicalized messages
+
+### 14.4 Deterministic Lineage
+
+For `/v1/chat/completions`, lineage is tracked with four columns:
+
+- `chat_hash` — SHA-256 hex of the canonicalized full message array
+- `parent_id` — foreign key to the parent log entry
+- `parent_prefix_len` — number of request messages that matched the parent
+- `message_count` — total number of messages in this request
+
+**Parent lookup:** On insertion, the writer attempts to find the parent entry
+by hashing message prefixes, with a capped search of 5 attempts:
+
+1. First try `N-2` messages (the common case: previous request without the new
+   user message and echoed assistant response).
+2. Then try remaining prefixes from `N-1` down to `1`, skipping `N-2`,
+   stopping after 5 total attempts.
+3. On first match, store `parent_id` and `parent_prefix_len`.
+4. If no match after the capped attempts, leave both `NULL`.
+
+The parent query uses:
+
+```sql
+SELECT id FROM openai_logs WHERE chat_hash = ? ORDER BY id DESC LIMIT 1
+```
+
+The "latest match wins" policy is a deliberate simplification for v5.
+
+**Truncation guard:** If `req_truncated == true`, all chat enrichment is
+skipped. The entry is treated as a standalone raw log with `NULL` values for
+all chat-specific columns.
+
+### 14.5 Thread Assembly — Top-Down Annotation with Backward Attribution
+
+The thread endpoint (`GET /api/logs/{id}/thread`) assembles the conversation
+view using a top-down annotation algorithm with backward attribution.
+
+**Reader query:** A recursive CTE traverses the `parent_id` chain upward from
+the selected entry to the root, then orders chronologically:
+
+```sql
+WITH RECURSIVE thread AS (
+    SELECT * FROM openai_logs WHERE id = ?
+    UNION ALL
+    SELECT o.* FROM openai_logs o
+    INNER JOIN thread t ON t.parent_id = o.id
+)
+SELECT * FROM thread ORDER BY id ASC;
+```
+
+This yields an ordered chain `[E0, E1, ..., En]` where `E0` is the root and
+`En` is the selected entry.
+
+**Algorithm:**
+
+1. Parse the **selected (final) entry's** `req_body.messages`. This is the
+   canonical conversation history. Let `M = len(messages)`.
+2. Attribute messages to log entries using backward attribution.
+3. Append the selected entry's extracted assistant response as the last
+   message, attributed to `En`.
+
+**Backward attribution:**
+
+```
+cursor = M
+
+for k = n down to 0:
+    if k == 0:
+        lower = 0
+    else:
+        lower = Ek.parent_prefix_len
+    Ek owns messages [lower, cursor)
+    cursor = lower
+```
+
+Each message in a range is annotated with the owning entry's `log_id`.
+
+**Boundary clamping:** If any `parent_prefix_len` exceeds `cursor` or is
+negative, it is clamped to `cursor`. This ensures the algorithm never panics
+and degrades gracefully.
+
+**Fallback for broken chains:** If the chain has only one entry (orphan root),
+all messages are attributed to that entry. If `parent_prefix_len` is `NULL`,
+it is treated as `0`.
+
+**Benefits:**
+
+- Eliminates double-echo of assistant messages.
+- Gracefully handles client history rewriting.
+- The rendered conversation is faithful to what the LLM actually received.
+- Lineage metadata is used only for attribution, not for content.
+
+### 14.6 Complex Message Handling
+
+Messages are classified as complex when they contain `tool_calls`,
+`function_call`, or multimodal content (array-typed `content`). Complex
+messages are detected by `GetMessageComplexity()` which returns a boolean flag
+and a machine-readable reason string.
+
+In conversation view:
+
+- Complex messages are never hidden.
+- They receive a placeholder `content` such as
+  `"[tool_calls — view raw Log #N]"`.
+- The `is_complex` and `complexity` fields on `ThreadMessage` allow frontends
+  to render appropriate indicators.
+
+For complex assistant responses that cannot be parsed as plain text, the thread
+endpoint attempts to extract text via `resp_text` or direct JSON parsing,
+falling back to a placeholder with the complexity reason.
+
+### 14.7 Sidecar Text Generation
+
+Before insert, the writer populates sidecar fields for chat endpoints:
+
+**Request text (`req_text`):**
+
+If parsing succeeds, extract searchable text from all messages. For text-only
+content, include the text directly. For complex content, insert a marker token
+such as `[complex-content]`. If parsing fails, leave `req_text` as `nil`
+(falls back to raw body via FTS `COALESCE`).
+
+**Response text (`resp_text`):**
+
+For chat responses, use the SSE extractor (for streamed responses) or direct
+JSON parsing (for non-streamed responses) to extract assistant text. If
+extraction fails or the content is complex, leave `resp_text` as `nil`.
+
+### 14.8 Known Limitations
+
+**Identical prefix collision:** Two conversations starting with the exact same
+messages share a `chat_hash`. The `ORDER BY id DESC LIMIT 1` parent lookup
+links to the most recent match, which may cross conversation boundaries. The
+rendered conversation text is always correct because it uses top-down
+annotation; only the attributed `Log #N` links on early messages may point to
+the wrong raw log.
+
+**Async queue ordering:** The writer uses a bounded channel consumed by a
+single goroutine. Entries enqueue in completion order, not request order. If
+Turn 2 finishes before Turn 1, it writes first and will not find Turn 1 as its
+parent. The conversation UI still renders correctly from the request body; only
+the lineage linkage is incomplete.
+
+**Client history rewriting:** If a client summarizes or modifies past messages
+between turns, the prefix hash will not match. `parent_id` will be `NULL` and
+the chain breaks. The conversation view renders the current request's messages
+correctly as a standalone conversation.
+
+**Client-echoed history:** The conversation view renders historical assistant
+messages exactly as the client echoed them back in the final request. If the
+client truncated or modified a previous assistant response, the conversation
+view shows the modified version. Users can click `Log #N` links to view the
+original proxy-captured response.
+
+## 15. Emacs Client Behavior
+
+The Emacs client provides two modes for interacting with logs:
+
+### 15.1 Log Detail View
+
+The show mode (`memoryelaine-show`) displays log entry details including
+headers, bodies, and stream-view support.
+
+### 15.2 Conversation View
+
+For `/v1/chat/completions` entries, press `c` in show mode to open a
+conversation view (`memoryelaine-thread-mode`):
+
+- displays the conversation header with turn count (1-based)
+- renders messages with role-specific faces:
+  - `user`: bold blue
+  - `assistant`: bold green
+  - `system` / `developer`: italic gray
+- `Log #N` appears as a clickable button that opens the raw log detail
+- press `q` to return to the previous view
+- `c` is only available for non-truncated chat completion entries
+
+## 16. Observability and Security
+
+### 16.1 Application Logging
 
 The service writes structured logs to stdout using Go's `log/slog`.
 
 The configured log level controls application log verbosity.
 
-### 14.2 Prometheus
+Chat-specific debug logging covers:
+
+- request/response parse failures
+- parent lookup success/failure
+- prefix search cap reached (all 5 attempts exhausted)
+- truncation guard activation
+
+### 16.2 Prometheus
 
 The management port exposes a Prometheus-compatible `/metrics` endpoint.
 
 The exact metric set may include standard Go/process collectors and
 implementation-defined application metrics.
 
-### 14.3 Security Posture
+### 16.3 Security Posture
 
 - request and response payloads are logged locally to SQLite
 - management endpoints are protected by Basic Auth except `/health`
 - sensitive headers are redacted from stored headers
 
-## 15. Failure Semantics
+## 17. Failure Semantics
 
 - If database writes fail, proxying continues.
 - If the logging queue is full, log entries may be dropped.
@@ -681,8 +1124,13 @@ implementation-defined application metrics.
   recording was enabled, that already-started request may still be fully logged.
 - If stream assembly fails in a viewer, the raw stored response remains
   available.
+- If chat enrichment fails (parse error, hash error, parent lookup error), the
+  log entry is still inserted with `NULL` chat-specific columns. Capture
+  reliability takes priority over thread perfection.
+- If an individual message in a thread cannot be parsed, the endpoint prefers
+  partial output over failing the entire request.
 
-## 16. Acceptance Criteria
+## 18. Acceptance Criteria
 
 1. Active streamed responses are forwarded to clients without intentional
    buffering delays.
@@ -705,3 +1153,21 @@ implementation-defined application metrics.
 11. `/health` exposes the current recording state.
 12. `/last-request` and `/last-response` clearly indicate when their values are
     stale due to paused recording and subsequent loggable traffic.
+13. Searching for words from a streamed `/v1/chat/completions` assistant
+    response succeeds via FTS.
+14. Searching non-chat endpoints still works via `COALESCE` fallback with no
+    storage duplication.
+15. FTS remains correct after a full index rebuild (non-chat entries are not
+    silently dropped).
+16. Conversation view for a selected log shows the root-to-selected chain in
+    order, with no double-echo of assistant messages.
+17. `system` and `developer` messages are visible in conversation view.
+18. Complex messages are not silently dropped; they are represented with
+    placeholders and raw-log links.
+19. Different tool-call messages produce different canonical hashes (no
+    `IsComplex`-only collision).
+20. Truncated entries are handled gracefully (no parse attempts, no conversation
+    button, raw fallback for FTS).
+21. Thread endpoint returns `400` for non-chat and truncated entries, and a
+    valid 1-entry thread for orphan roots.
+22. Sidecar columns are `NULL` or non-empty, never empty strings.
