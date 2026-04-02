@@ -87,11 +87,40 @@ func Load(cfgPath string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
 
+	if err := cfg.expandPaths(); err != nil {
+		return nil, fmt.Errorf("expanding config paths: %w", err)
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+func (c *Config) expandPaths() error {
+	path, err := expandUserPath(c.Database.Path)
+	if err != nil {
+		return err
+	}
+	c.Database.Path = path
+	return nil
+}
+
+func expandUserPath(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home directory: %w", err)
+	}
+	if path == "~" {
+		return home, nil
+	}
+
+	return filepath.Join(home, path[2:]), nil
 }
 
 func (c *Config) validate() error {

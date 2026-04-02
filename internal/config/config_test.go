@@ -93,6 +93,71 @@ func TestLoad_DefaultsNoExplicitPath(t *testing.T) {
 	}
 }
 
+func TestLoad_ExpandsDatabasePathHomeDir(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	data := `
+proxy:
+  listen_addr: ":13844"
+  upstream_base_url: "https://example.com"
+  log_paths: ["/test"]
+management:
+  listen_addr: ":13845"
+database:
+  path: "~/.cache/memel.db"
+logging:
+  max_capture_bytes: 1024
+`
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := filepath.Join(home, ".cache", "memel.db")
+	if cfg.Database.Path != want {
+		t.Fatalf("expected expanded database path %q, got %q", want, cfg.Database.Path)
+	}
+}
+
+func TestLoad_ExpandsDatabasePathBareHomeDir(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	data := `
+proxy:
+  listen_addr: ":13844"
+  upstream_base_url: "https://example.com"
+  log_paths: ["/test"]
+management:
+  listen_addr: ":13845"
+database:
+  path: "~"
+logging:
+  max_capture_bytes: 1024
+`
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Database.Path != home {
+		t.Fatalf("expected expanded database path %q, got %q", home, cfg.Database.Path)
+	}
+}
+
 func TestValidate_BadURL(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
