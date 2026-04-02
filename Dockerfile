@@ -16,6 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=builder /memoryelaine /usr/local/bin/memoryelaine
 RUN mkdir -p /data
 VOLUME ["/data"]
-EXPOSE 8000 8080
+EXPOSE 13844 13845
 ENTRYPOINT ["memoryelaine"]
 CMD ["serve", "--config", "/data/config.yaml"]

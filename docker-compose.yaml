@@ -3,8 +3,8 @@ services:
   memoryelaine:
     build: .
     ports:
-      - "8000:8000"
-      - "8080:8080"
+      - "13844:13844"
+      - "13845:13845"
     volumes:
       - ./data:/data
     environment:

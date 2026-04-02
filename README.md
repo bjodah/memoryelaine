@@ -80,7 +80,7 @@ memoryelaine prune --keep-days 30 --vacuum
 Example config file (`config.yaml`):
 ```yaml
 proxy:
-  listen_addr: "0.0.0.0:8000"
+  listen_addr: "0.0.0.0:13844"
   upstream_base_url: "https://api.openai.com"
   timeout_minutes: 23
   log_paths:
@@ -88,7 +88,7 @@ proxy:
     - "/v1/completions"
 
 management:
-  listen_addr: "0.0.0.0:8080"
+  listen_addr: "0.0.0.0:13845"
   auth:
     username: "admin"
     password: "changeme"
@@ -106,7 +106,7 @@ Lookup order: `--config <path>` → `./config.yaml` → `$HOME/.config/memoryela
 ### Configuration Fields
 
 #### `proxy.listen_addr`
-Address for the proxy listener. Default: `0.0.0.0:8000`
+Address for the proxy listener. Default: `0.0.0.0:13844`
 
 #### `proxy.upstream_base_url`
 Base URL for the single upstream provider. Must be a valid `http://` or `https://` URL. Default: `https://api.openai.com`
@@ -120,7 +120,7 @@ Exact path allowlist for payload capture. Requests on other paths are still prox
 - `/v1/completions`
 
 #### `management.listen_addr`
-Address for the management server. Must differ from proxy.listen_addr. Default: `0.0.0.0:8080`
+Address for the management server. Must differ from proxy.listen_addr. Default: `0.0.0.0:13845`
 
 #### `management.preview_bytes`
 Maximum bytes returned in body preview responses via `/api/logs/{id}/body`. Default: `65536` (64 KiB)
@@ -197,7 +197,21 @@ Assembled mode is unavailable for truncated, non-streamed, or unsupported respon
 
 ## Emacs client
 
-Under ./emacs/ you will find elisp source for an emacs package.
+Under [./emacs-memoryelaine/](./emacs-memoryelaine/) you will find elisp source for an emacs package.
+
+Here's a sample setup:
+```elisp
+(use-package memoryelaine
+  :load-path (lambda () (list (file-truename (concat user-emacs-directory "memoryelaine/emacs-memoryelaine"))))
+  :init
+  (setq memoryelaine-base-url
+        (if (member (getenv "container") '("podman" "docker"))
+            "http://host.docker.internal:13845"
+          "http://localhost:13845"))
+  :custom
+  (memoryelaine-password "changeme")
+  (memoryelaine-username "admin"))
+```
 
 ## Development
 
