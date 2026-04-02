@@ -323,5 +323,28 @@
       (should (string-match-p "12 B / 24 B" rendered))
       (should-not (string-match-p "100 B / 500 B" rendered)))))
 
+(ert-deftest memoryelaine-test-json-view-pretty-format ()
+  "JSON inspector should pretty-print JSON content."
+  (let ((rendered (memoryelaine-json-view--pretty-format "{\"a\":1,\"b\":{\"c\":2}}")))
+    (should (string-match-p "\"a\": 1" rendered))
+    (should (string-match-p "\"b\":" rendered))
+    (should (string-match-p "\"c\": 2" rendered))))
+
+(ert-deftest memoryelaine-test-show-open-request-json-view ()
+  "Request JSON view should delegate to the JSON inspector with cached body."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42)))
+    (memoryelaine-state-detail-set-body "req" "raw" "{\"model\":\"gpt\"}"
+                                        '((truncated) (included_bytes . 15) (total_bytes . 15)))
+    (let (captured-title captured-body)
+      (cl-letf (((symbol-function 'memoryelaine-json-view-open)
+                 (lambda (title content)
+                   (setq captured-title title
+                         captured-body content))))
+        (memoryelaine-show-open-request-json-view))
+      (should (equal captured-title "Log #42 Request JSON"))
+      (should (equal captured-body "{\"model\":\"gpt\"}")))))
+
 (provide 'memoryelaine-test)
 ;;; memoryelaine-test.el ends here

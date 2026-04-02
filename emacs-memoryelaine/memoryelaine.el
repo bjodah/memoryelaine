@@ -2,9 +2,9 @@
 
 ;; Author: memoryelaine contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools, convenience
-;; URL: https://github.com/memoryelaine/memoryelaine
+;; URL: https://github.com/bjodah/memoryelaine
 
 ;;; Commentary:
 
@@ -77,6 +77,7 @@ Called with one argument: the entry ID (integer)."
 (require 'memoryelaine-log)
 (require 'memoryelaine-auth)
 (require 'memoryelaine-http)
+(require 'memoryelaine-json-view)
 (require 'memoryelaine-state)
 (require 'memoryelaine-search)
 (require 'memoryelaine-show)

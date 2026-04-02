@@ -9,6 +9,7 @@
 
 (require 'memoryelaine-log)
 (require 'memoryelaine-http)
+(require 'memoryelaine-json-view)
 (require 'memoryelaine-state)
 
 (defvar memoryelaine-show-buffer-name "*memoryelaine-entry*"
@@ -21,6 +22,7 @@
     (define-key map (kbd "v") #'memoryelaine-show-toggle-view)
     (define-key map (kbd "t") #'memoryelaine-show-fetch-full-bodies)
     (define-key map (kbd "c") #'memoryelaine-show-open-conversation)
+    (define-key map (kbd "j") #'memoryelaine-show-open-request-json-view)
     map)
   "Keymap for `memoryelaine-show-mode'.")
 
@@ -172,7 +174,7 @@ FULL is non-nil to fetch the complete body."
 
       ;; Help line
       (insert "\n")
-      (insert (propertize "q:back  g:refresh  v:toggle view  t:load full bodies  c:conversation"
+      (insert (propertize "q:back  g:refresh  v:toggle view  t:load full bodies  c:conversation  j:request json"
                           'face 'shadow)))
     (goto-char (min pos (point-max)))))
 
@@ -296,10 +298,25 @@ Shows preview/full content with size info, or a placeholder."
                             (or (alist-get 'request_path entry) "")))
       (message "memoryelaine: conversation view only available for chat/completions"))
      ((alist-get 'req_truncated entry)
-      (message "memoryelaine: conversation view not available for truncated requests"))
+     (message "memoryelaine: conversation view not available for truncated requests"))
      (t
       (require 'memoryelaine-thread)
       (memoryelaine-thread-open memoryelaine-state--entry-id)))))
+
+(defun memoryelaine-show-open-request-json-view ()
+  "Open the current request body in the JSON inspector."
+  (interactive)
+  (cond
+   ((null memoryelaine-state--metadata)
+    (message "memoryelaine: no entry loaded"))
+   ((eq memoryelaine-state--req-body-state 'none)
+    (message "memoryelaine: request body not loaded yet"))
+   ((null memoryelaine-state--req-body)
+    (message "memoryelaine: request body is empty"))
+   (t
+    (memoryelaine-json-view-open
+     (format "Log #%d Request JSON" memoryelaine-state--entry-id)
+     memoryelaine-state--req-body))))
 
 ;; --- Formatting helpers ---
 
