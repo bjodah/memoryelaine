@@ -1635,6 +1635,48 @@ func TestBodyEndpointEllipsisChangedSetsFlags(t *testing.T) {
 	}
 }
 
+func TestBodyEndpointRawResponseEllipsisChangedSetsFlags(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 100000
+
+	respBody := `{"content":"` + strings.Repeat("b", 200) + `","id":"resp-1"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        `{}`,
+		ReqBytes:       2,
+		RespBody:       ptr(respBody),
+		RespBytes:      int64(len(respBody)),
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=raw&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Ellipsized {
+		t.Error("expected ellipsized=true")
+	}
+	if body.Truncated {
+		t.Error("expected truncated=false when ellipsized")
+	}
+	if body.Complete {
+		t.Error("expected complete=false when ellipsized")
+	}
+	if !strings.Contains(body.Content, "...") {
+		t.Errorf("expected ellipsized content, got %q", body.Content)
+	}
+}
+
 func TestBodyEndpointEllipsisNoChangeFallsBackToPreviewRules(t *testing.T) {
 	deps := setupTestDeps(t)
 	deps.PreviewBytes = 50
@@ -1718,6 +1760,48 @@ func TestBodyEndpointEllipsisIgnoredForNonJSON(t *testing.T) {
 	}
 }
 
+func TestBodyEndpointInvalidEllipsisIgnored(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 100000
+
+	reqBody := `{"prompt":"` + strings.Repeat("q", 200) + `","model":"gpt-4"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        reqBody,
+		ReqBytes:       int64(len(reqBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&ellipsis=bogus")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Ellipsized {
+		t.Error("expected ellipsized=false for invalid ellipsis value")
+	}
+	if body.Truncated {
+		t.Error("expected truncated=false within preview limit")
+	}
+	if !body.Complete {
+		t.Error("expected complete=true when invalid ellipsis is ignored")
+	}
+	if body.Content != reqBody {
+		t.Errorf("expected original content, got %q", body.Content)
+	}
+}
+
 func TestBodyEndpointCompleteTrueForCanonicalBody(t *testing.T) {
 	deps := setupTestDeps(t)
 	reqBody := `{"model":"gpt-4"}`
@@ -1788,6 +1872,45 @@ func TestBodyEndpointFullAndEllipsisStillNotComplete(t *testing.T) {
 	}
 	if body.Complete {
 		t.Error("expected complete=false when ellipsized, even with full=true")
+	}
+}
+
+func TestBodyEndpointEllipsizedLargeBodySkipsPreviewTruncation(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 30
+
+	reqBody := `{"prompt":"` + strings.Repeat("x", 200) + `","metadata":{"note":"` + strings.Repeat("y", 50) + `"}}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        reqBody,
+		ReqBytes:       int64(len(reqBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Ellipsized {
+		t.Error("expected ellipsized=true")
+	}
+	if body.Truncated {
+		t.Error("expected truncated=false on ellipsized display path")
+	}
+	if body.IncludedBytes <= deps.PreviewBytes {
+		t.Fatalf("expected included_bytes to exceed preview limit, got %d", body.IncludedBytes)
 	}
 }
 

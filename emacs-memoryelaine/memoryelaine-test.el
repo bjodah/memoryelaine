@@ -375,6 +375,16 @@
       (should (string-match-p "12 B / 24 B" rendered))
       (should-not (string-match-p "100 B / 500 B" rendered)))))
 
+(ert-deftest memoryelaine-test-show-insert-body-ellipsized-notice ()
+  "Ellipsized preview bodies should render an explicit display notice."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (memoryelaine-state-detail-set-body "req" "raw" "{\"prompt\":\"shortened...\"}"
+                                        '((complete . :false) (ellipsized . t)
+                                          (included_bytes . 24) (total_bytes . 200)))
+    (memoryelaine-show--insert-body "req")
+    (should (string-match-p "Display: long strings shortened" (buffer-string)))))
+
 (ert-deftest memoryelaine-test-json-view-pretty-format ()
   "JSON inspector should pretty-print JSON content."
   (let ((rendered (memoryelaine-json-view--pretty-format "{\"a\":1,\"b\":{\"c\":2}}")))
@@ -589,6 +599,122 @@
                  (lambda (_url _params _callback) (setq fetch-called t))))
         (memoryelaine-show-copy-request-body))
       (should fetch-called))))
+
+(ert-deftest memoryelaine-test-show-with-full-body-calls-callback-after-fetch ()
+  "Full-body helper should update cached state and run the callback on success."
+  (let ((memoryelaine-show-buffer-name "*memoryelaine-test-show*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-show-buffer-name)
+          (memoryelaine-show-mode)
+          (memoryelaine-state-detail-init 42)
+          (setq memoryelaine-state--metadata
+                '((id . 42)
+                  (ts_start . 1700000000000)
+                  (ts_end . 1700000001000)
+                  (duration_ms . 1000)
+                  (client_ip . "127.0.0.1")
+                  (request_method . "POST")
+                  (request_path . "/v1/chat/completions")
+                  (upstream_url . "http://example.test")
+                  (status_code . 200)
+                  (req_headers . (("Content-Type" . "application/json")))
+                  (resp_headers . (("Content-Type" . "application/json")))
+                  (req_bytes . 32)
+                  (resp_bytes . 16)))
+          (memoryelaine-state-detail-set-body "req" "raw" "{\"preview\":true}"
+                                              '((complete . :false) (ellipsized . t)
+                                                (included_bytes . 16) (total_bytes . 32)))
+          (let (callback-called)
+            (cl-letf (((symbol-function 'memoryelaine-http-get)
+                       (lambda (_url _params callback)
+                         (funcall callback 200 '((available . t)
+                                                 (content . "{\"full\":true}")
+                                                 (complete . t)
+                                                 (included_bytes . 13)
+                                                 (total_bytes . 13))
+                                  nil)))
+                      ((symbol-function 'message) #'ignore))
+              (memoryelaine-show--with-full-body
+               "req" "raw"
+               (lambda () (setq callback-called t))))
+            (should callback-called)
+            (should (equal memoryelaine-state--req-body "{\"full\":true}"))
+            (should (eq memoryelaine-state--req-body-state 'full))))
+      (when (get-buffer memoryelaine-show-buffer-name)
+        (kill-buffer memoryelaine-show-buffer-name)))))
+
+(ert-deftest memoryelaine-test-show-with-full-body-stale-response-dropped ()
+  "Full-body helper should ignore stale responses after generation changes."
+  (let ((memoryelaine-show-buffer-name "*memoryelaine-test-show*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-show-buffer-name)
+          (memoryelaine-show-mode)
+          (memoryelaine-state-detail-init 42)
+          (setq memoryelaine-state--metadata
+                '((id . 42)
+                  (ts_start . 1700000000000)
+                  (ts_end . 1700000001000)
+                  (duration_ms . 1000)
+                  (client_ip . "127.0.0.1")
+                  (request_method . "POST")
+                  (request_path . "/v1/chat/completions")
+                  (upstream_url . "http://example.test")
+                  (status_code . 200)
+                  (req_headers . (("Content-Type" . "application/json")))
+                  (resp_headers . (("Content-Type" . "application/json")))
+                  (req_bytes . 32)
+                  (resp_bytes . 16)))
+          (memoryelaine-state-detail-set-body "req" "raw" "{\"preview\":true}"
+                                              '((complete . :false) (ellipsized . t)
+                                                (included_bytes . 16) (total_bytes . 32)))
+          (let (saved-callback callback-called)
+            (cl-letf (((symbol-function 'memoryelaine-http-get)
+                       (lambda (_url _params callback)
+                         (setq saved-callback callback)))
+                      ((symbol-function 'message) #'ignore))
+              (memoryelaine-show--with-full-body
+               "req" "raw"
+               (lambda () (setq callback-called t))))
+            (setq memoryelaine-state--detail-generation
+                  (1+ memoryelaine-state--detail-generation))
+            (funcall saved-callback 200 '((available . t)
+                                          (content . "{\"full\":true}")
+                                          (complete . t)
+                                          (included_bytes . 13)
+                                          (total_bytes . 13))
+                     nil)
+            (should-not callback-called)
+            (should (equal memoryelaine-state--req-body "{\"preview\":true}"))
+            (should (eq memoryelaine-state--req-body-state 'preview))))
+      (when (get-buffer memoryelaine-show-buffer-name)
+        (kill-buffer memoryelaine-show-buffer-name)))))
+
+(ert-deftest memoryelaine-test-show-with-full-body-unavailable-does-not-callback ()
+  "Full-body helper should not call the callback when the body is unavailable."
+  (let ((memoryelaine-show-buffer-name "*memoryelaine-test-show*"))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-show-buffer-name)
+          (memoryelaine-show-mode)
+          (memoryelaine-state-detail-init 42)
+          (setq memoryelaine-state--metadata '((id . 42)))
+          (memoryelaine-state-detail-set-body "req" "raw" "{\"preview\":true}"
+                                              '((complete . :false) (ellipsized . t)
+                                                (included_bytes . 16) (total_bytes . 32)))
+          (let (callback-called)
+            (cl-letf (((symbol-function 'memoryelaine-http-get)
+                       (lambda (_url _params callback)
+                         (funcall callback 200 '((available . :false)
+                                                 (reason . "missing body"))
+                                  nil)))
+                      ((symbol-function 'message) #'ignore))
+              (memoryelaine-show--with-full-body
+               "req" "raw"
+               (lambda () (setq callback-called t))))
+            (should-not callback-called)
+            (should (equal memoryelaine-state--req-body "{\"preview\":true}"))
+            (should (eq memoryelaine-state--req-body-state 'preview))))
+      (when (get-buffer memoryelaine-show-buffer-name)
+        (kill-buffer memoryelaine-show-buffer-name)))))
 
 (provide 'memoryelaine-test)
 ;;; memoryelaine-test.el ends here

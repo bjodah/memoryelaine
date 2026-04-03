@@ -3,6 +3,7 @@ package jsonellipsis
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"unicode/utf8"
 )
@@ -45,6 +46,12 @@ func Transform(src []byte, limit int, keys map[string]bool, minDepth int) ([]byt
 	if err := dec.Decode(&raw); err != nil {
 		return nil, false, err
 	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return nil, false, io.ErrUnexpectedEOF
+		}
+		return nil, false, err
+	}
 
 	changed := false
 	result := walk(raw, "", keys, limit, minDepth, 0, &changed)
@@ -67,7 +74,7 @@ func walk(v any, parentKey string, keys map[string]bool, limit, minDepth, depth 
 	case []any:
 		out := make([]any, len(val))
 		for i, child := range val {
-			out[i] = walk(child, parentKey, keys, limit, minDepth, depth, changed)
+			out[i] = walk(child, parentKey, keys, limit, minDepth, depth+1, changed)
 		}
 		return out
 	case string:

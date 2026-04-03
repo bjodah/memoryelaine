@@ -88,7 +88,6 @@ disable display ellipsis."
 (require 'memoryelaine-log)
 (require 'memoryelaine-auth)
 (require 'memoryelaine-http)
-(require 'memoryelaine-json-view)
 (require 'memoryelaine-state)
 (require 'memoryelaine-search)
 (require 'memoryelaine-show)

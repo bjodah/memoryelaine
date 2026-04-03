@@ -97,6 +97,28 @@ func TestTransformArray(t *testing.T) {
 	}
 }
 
+func TestTransformArrayDepthCountsTowardMinDepth(t *testing.T) {
+	src := []byte(`[[{"content":"a very long string that exceeds the limit"}]]`)
+	out, changed, err := Transform(src, 10, DefaultKeys, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	if !json.Valid(out) {
+		t.Fatal("output is not valid JSON")
+	}
+	var arr []any
+	if err := json.Unmarshal(out, &arr); err != nil {
+		t.Fatal(err)
+	}
+	value := arr[0].([]any)[0].(map[string]any)["content"].(string)
+	if value != "a very lon..." {
+		t.Fatalf("expected %q, got %q", "a very lon...", value)
+	}
+}
+
 func TestTransformKeyFiltering(t *testing.T) {
 	src := []byte(`{"prompt":"long string value here","description":"long string value here"}`)
 	out, changed, err := Transform(src, 5, DefaultKeys, 100)
@@ -178,6 +200,14 @@ func TestTransformNonJSON(t *testing.T) {
 	_, _, err := Transform(src, 10, nil, 1)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestTransformRejectsTrailingGarbage(t *testing.T) {
+	src := []byte(`{"content":"valid"} trailing`)
+	_, _, err := Transform(src, 10, nil, 1)
+	if err == nil {
+		t.Fatal("expected error for trailing garbage")
 	}
 }
 

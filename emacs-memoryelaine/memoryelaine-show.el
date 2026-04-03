@@ -129,7 +129,7 @@ FULL is non-nil to fetch the complete body."
              (when (and (>= status 200) (< status 300))
                (let ((content (or (alist-get 'content data) ""))
                      (available (alist-get 'available data)))
-                 (if available
+                 (if (memoryelaine-show--json-true-p available)
                      (memoryelaine-state-detail-set-body part mode content data)
                    (memoryelaine-log-debug "Body not available (%s): %s"
                                            part (alist-get 'reason data)))
@@ -272,6 +272,10 @@ When DEFAULT-EMPTY-OBJECT is non-nil, nil values are encoded as `{}`."
   (kill-new content)
   (message "memoryelaine: copied %s" label))
 
+(defun memoryelaine-show--json-true-p (value)
+  "Return non-nil when VALUE is the JSON boolean true."
+  (eq value t))
+
 (defun memoryelaine-show--insert-body (part)
   "Insert body content for PART (\"req\" or \"resp\").
 Shows preview/full content with size info, or a placeholder."
@@ -302,13 +306,14 @@ Shows preview/full content with size info, or a placeholder."
             (ellipsized (alist-get 'ellipsized body-info))
             (complete (alist-get 'complete body-info)))
         (cond
-         (truncated
+         ((memoryelaine-show--json-true-p truncated)
           (insert (propertize
                    (format "  [Preview: %s / %s — press t to load full]\n"
                            (memoryelaine-show--format-bytes included)
                            (memoryelaine-show--format-bytes total))
                    'face 'warning)))
-         ((and ellipsized (not complete))
+         ((and (memoryelaine-show--json-true-p ellipsized)
+               (not (memoryelaine-show--json-true-p complete)))
           (insert (propertize
                    "  [Display: long strings shortened — press t for full body]\n"
                    'face 'warning))))
@@ -404,7 +409,7 @@ response handler."
                  (when (and (>= status 200) (< status 300))
                    (let ((content (or (alist-get 'content data) ""))
                          (available (alist-get 'available data)))
-                     (when available
+                     (when (memoryelaine-show--json-true-p available)
                        (memoryelaine-state-detail-set-body part mode content data)
                        (memoryelaine-show--render)
                        (funcall callback)))))))))))))
