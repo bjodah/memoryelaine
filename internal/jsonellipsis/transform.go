@@ -56,6 +56,10 @@ func Transform(src []byte, limit int, keys map[string]bool, minDepth int) ([]byt
 	changed := false
 	result := walk(raw, "", keys, limit, minDepth, 0, &changed)
 
+	if !changed {
+		return src, false, nil
+	}
+
 	out, err := json.Marshal(result)
 	if err != nil {
 		return nil, false, err

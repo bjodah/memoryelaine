@@ -12,7 +12,7 @@ Here's a sample setup:
 
 ```elisp
 (use-package treesit-fold
-  :vc (:url https://github.com/emacs-tree-sitter/treesit-fold
+  :vc (:url "https://github.com/emacs-tree-sitter/treesit-fold"
             :rev :newest :branch "master")) ;; dependency
 
 (use-package memoryelaine

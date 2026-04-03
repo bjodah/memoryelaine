@@ -11,7 +11,7 @@ import (
 )
 
 func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
-	return Model{
+	m := Model{
 		mode:   modeDetail,
 		detail: entry,
 		streamView: streamViewState{
@@ -21,6 +21,8 @@ func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
 		width:  120,
 		height: 40,
 	}
+	m.recomputeDetailBodies()
+	return m
 }
 
 func sampleEntry() *database.LogEntry {

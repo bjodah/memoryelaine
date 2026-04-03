@@ -301,8 +301,8 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 			}
 		}
 
-		// If not ellipsized, apply normal preview/full truncation.
-		if !resp.Ellipsized && !full && len(content) > previewBytes {
+		// Enforce preview size limit (applies to both ellipsized and plain content).
+		if !full && len(content) > previewBytes {
 			content = content[:previewBytes]
 			resp.Truncated = true
 			resp.Complete = false

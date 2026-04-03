@@ -24,24 +24,26 @@ const (
 )
 
 type Model struct {
-	mode         viewMode
-	reader       *database.LogReader
-	filter       database.QueryFilter
-	entries      []database.LogSummary
-	total        int64
-	cursor       int
-	detail       *database.LogEntry
-	streamView   streamViewState
-	scroll       int
-	thread       []threadMessage
-	threadScroll int
-	threadLogID  int64
-	threadIndex  int
-	threadTotal  int
-	err          error
-	width        int
-	height       int
-	quit         bool
+	mode           viewMode
+	reader         *database.LogReader
+	filter         database.QueryFilter
+	entries        []database.LogSummary
+	total          int64
+	cursor         int
+	detail         *database.LogEntry
+	streamView     streamViewState
+	detailReqBody  string // precomputed ellipsized request body
+	detailRespBody string // precomputed ellipsized response body
+	scroll         int
+	thread         []threadMessage
+	threadScroll   int
+	threadLogID    int64
+	threadIndex    int
+	threadTotal    int
+	err            error
+	width          int
+	height         int
+	quit           bool
 }
 
 type streamViewState struct {
@@ -110,6 +112,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeDetail
 		m.scroll = 0
+		m.recomputeDetailBodies()
 		return m, nil
 
 	case threadLoadedMsg:
@@ -167,6 +170,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.streamView.mode = streamview.ModeRaw
 				}
+				m.recomputeDetailBodies()
 			}
 			return m, nil
 		case "c":
@@ -318,12 +322,6 @@ func (m Model) detailView() string {
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Log #%d", e.ID)))
 	b.WriteString("\n")
 
-	// Determine response body content based on stream view mode
-	respBodyContent := fmtStrPtr(e.RespBody)
-	if m.streamView.mode == streamview.ModeAssembled && m.streamView.result.AssembledAvailable {
-		respBodyContent = m.streamView.result.AssembledBody
-	}
-
 	// Stream view status line
 	svStatus := m.streamViewStatusLine()
 
@@ -341,14 +339,14 @@ func (m Model) detailView() string {
 		e.ReqHeadersJSON,
 		"",
 		fmt.Sprintf("─── Request Body (%d bytes%s) ───", e.ReqBytes, truncLabel(e.ReqTruncated)),
-		ellipsizeBody(e.ReqBody, 10000),
+		m.detailReqBody,
 		"",
 		"─── Response Headers ───",
 		fmtStrPtr(e.RespHeadersJSON),
 		"",
 		fmt.Sprintf("─── Response Body (%d bytes%s) ───", e.RespBytes, truncLabel(e.RespTruncated)),
 		svStatus,
-		ellipsizeBody(respBodyContent, 10000),
+		m.detailRespBody,
 	}
 
 	viewH := m.height - 3
@@ -374,6 +372,22 @@ func (m Model) detailView() string {
 
 	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view  c:conversation"))
 	return b.String()
+}
+
+// recomputeDetailBodies precomputes the ellipsized display strings for the
+// current detail entry so that View() never performs expensive JSON transforms.
+func (m *Model) recomputeDetailBodies() {
+	e := m.detail
+	if e == nil {
+		return
+	}
+	m.detailReqBody = ellipsizeBody(e.ReqBody, 10000)
+
+	respBodyContent := fmtStrPtr(e.RespBody)
+	if m.streamView.mode == streamview.ModeAssembled && m.streamView.result.AssembledAvailable {
+		respBodyContent = m.streamView.result.AssembledBody
+	}
+	m.detailRespBody = ellipsizeBody(respBodyContent, 10000)
 }
 
 func (m Model) streamViewStatusLine() string {

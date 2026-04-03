@@ -1875,7 +1875,7 @@ func TestBodyEndpointFullAndEllipsisStillNotComplete(t *testing.T) {
 	}
 }
 
-func TestBodyEndpointEllipsizedLargeBodySkipsPreviewTruncation(t *testing.T) {
+func TestBodyEndpointEllipsizedLargeBodyEnforcesPreviewLimit(t *testing.T) {
 	deps := setupTestDeps(t)
 	deps.PreviewBytes = 30
 
@@ -1906,11 +1906,14 @@ func TestBodyEndpointEllipsizedLargeBodySkipsPreviewTruncation(t *testing.T) {
 	if !body.Ellipsized {
 		t.Error("expected ellipsized=true")
 	}
-	if body.Truncated {
-		t.Error("expected truncated=false on ellipsized display path")
+	if !body.Truncated {
+		t.Error("expected truncated=true when ellipsized content exceeds preview limit")
 	}
-	if body.IncludedBytes <= deps.PreviewBytes {
-		t.Fatalf("expected included_bytes to exceed preview limit, got %d", body.IncludedBytes)
+	if body.Complete {
+		t.Error("expected complete=false when preview-truncated after ellipsis")
+	}
+	if body.IncludedBytes > deps.PreviewBytes {
+		t.Fatalf("expected included_bytes <= preview limit %d, got %d", deps.PreviewBytes, body.IncludedBytes)
 	}
 }
 
