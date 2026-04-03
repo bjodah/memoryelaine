@@ -8,6 +8,10 @@ provider. Its primary purpose is to proxy requests with no intentional buffering
 of active streams while asynchronously logging selected request/response pairs,
 timings, and HTTP metadata to a local SQLite database.
 
+The inspection surfaces also share a display-oriented JSON ellipsis transform
+for long request and response bodies, and the Emacs client adds a dedicated JSON
+inspector for canonical full-body viewing.
+
 The system exposes multiple ways to inspect stored logs:
 
 - a CLI (`memoryelaine log`)
@@ -42,6 +46,8 @@ root-to-selected conversation chain with per-turn attribution.
   raw SSE fragments.
 - Provide a conversation-oriented view for `/v1/chat/completions` traffic
   across all frontends (TUI, Web UI, Emacs).
+- Provide shared display-oriented JSON ellipsis for long body previews across
+  the Web UI, TUI, and Emacs.
 
 ## 3. Non-Goals
 
@@ -577,9 +583,17 @@ Query parameters:
 - `part`: `req` or `resp` (default: `resp`)
 - `mode`: `raw` or `assembled` (default: `raw`)
 - `full`: `true` or `false` (default: `false`)
+- `ellipsis`: positive integer rune limit for display-oriented JSON string
+  shortening (optional)
 
 When `full=false`, the response is limited to `management.preview_bytes`
 (default: 65536). When `full=true`, the complete stored body is returned.
+
+When `ellipsis` is present and the source body is valid JSON, the server first
+attempts to shorten long string values for display. If that transform changes
+the payload, `ellipsized=true` is returned. Preview truncation still applies to
+the transformed body when `full=false`, so `ellipsized=true` and
+`truncated=true` may both be set.
 
 When `mode=assembled`, the endpoint returns the derived assembled text for
 supported streamed responses. If assembly is unavailable, the endpoint returns
@@ -597,6 +611,8 @@ Response shape:
   "included_bytes": 11,
   "total_bytes": 42,
   "truncated": true,
+  "ellipsized": false,
+  "complete": false,
   "available": true,
   "reason": ""
 }
@@ -608,6 +624,8 @@ Notes:
   representation, not some other representation of the same body. For example,
   `mode=assembled` reports assembled-content byte counts, while `mode=raw`
   reports raw stored-body byte counts.
+- `complete=true` means the returned content is the canonical full body with no
+  display ellipsis or preview truncation applied.
 - For unavailable bodies, `available` is `false`, `content` may be empty, and
   `reason` explains why the requested representation cannot be returned.
 - `part=req` with `mode=assembled` is invalid and must return
@@ -790,6 +808,8 @@ Required detail behavior:
 - leave detail view with `esc` or `q`
 - scroll with `j`/`k`
 - display request and response headers and bodies
+- request and response bodies use the shared JSON ellipsis transform for long
+  string values before rendering
 - for supported streamed responses, toggle `Stream view mode` between `Raw` and
   `Assembled`
 - if the assembled result is partial, display a clear warning state
@@ -836,6 +856,10 @@ The detail overlay includes a `View Conversation` button for
 - `Log #N` links are clickable and navigate to the raw log detail for that
   entry
 - a clear switch returns to the raw request/response panes
+- body panes load preview content with the shared JSON ellipsis transform
+- if a fetched body is not `complete`, the UI offers a `Load Full` action that
+  refetches the canonical body
+- the preview info line distinguishes byte truncation from display ellipsis
 
 ## 14. Chat Specialization
 
@@ -1068,7 +1092,21 @@ The Emacs client provides two modes for interacting with logs:
 ### 15.1 Log Detail View
 
 The show mode (`memoryelaine-show`) displays log entry details including
-headers, bodies, and stream-view support.
+headers, bodies, stream-view support, and entry navigation.
+
+- `g` refreshes the current entry
+- `v` toggles raw and assembled response view when assembled data is available
+- `t` fetches canonical full request/response bodies on demand
+- `M-n` / `M-p` jump between section headings
+- `C-M-n` / `C-M-p` jump to the next or previous search result entry
+- `w h/b/H/B` copies request headers, request body, response headers, or
+  response body; the body copy commands auto-fetch canonical full bodies before
+  copying
+- `j` and `J` open the request or response body in a dedicated JSON inspector
+
+The JSON inspector requires Emacs 29.1+, JSON tree-sitter support, and
+`treesit-fold`. It opens valid JSON in a foldable `json-ts-mode` buffer and
+rejects invalid JSON with a user-facing error.
 
 ### 15.2 Conversation View
 
@@ -1171,3 +1209,8 @@ implementation-defined application metrics.
 21. Thread endpoint returns `400` for non-chat and truncated entries, and a
     valid 1-entry thread for orphan roots.
 22. Sidecar columns are `NULL` or non-empty, never empty strings.
+23. TUI, Web UI, and Emacs all show long JSON string values with the shared
+    ellipsis transform while preserving canonical full bodies on demand.
+24. Emacs can open request and response bodies in a dedicated foldable JSON
+    inspector, and body copy commands fetch canonical full content before
+    copying.
