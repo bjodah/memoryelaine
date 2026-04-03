@@ -6,5 +6,5 @@ cd "$ROOT_DIR"
 
 
 printf '==> Running node --check\n'
-node --check /work/internal/web/static/app.js
+node --check internal/web/static/app.js
 
