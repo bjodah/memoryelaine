@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 ;;; --- Search state (global) ---
 
 (defvar memoryelaine-state--query ""
@@ -33,6 +35,16 @@ Used to discard stale responses.")
 
 (defvar memoryelaine-state--recording t
   "Current recording state from the server.")
+
+(defun memoryelaine-state-summary-neighbor-id (entry-id direction)
+  "Return a neighbor entry ID for ENTRY-ID in current summaries.
+DIRECTION should be 1 for the next entry or -1 for the previous entry."
+  (let* ((ids (mapcar (lambda (summary) (alist-get 'id summary))
+                      memoryelaine-state--summaries))
+         (index (cl-position entry-id ids :test #'equal))
+         (target (and index (+ index direction))))
+    (when (and target (>= target 0) (< target (length ids)))
+      (nth target ids))))
 
 (defun memoryelaine-state-set-query (query)
   "Set the search QUERY and reset pagination."
@@ -146,8 +158,7 @@ Used to discard stale responses.")
         memoryelaine-state--resp-body-info nil
         memoryelaine-state--resp-body-assembled-state 'none
         memoryelaine-state--resp-body-assembled-info nil
-        memoryelaine-state--detail-loading nil
-        memoryelaine-state--detail-generation 0))
+        memoryelaine-state--detail-loading nil))
 
 (defun memoryelaine-state-detail-set-metadata (metadata stream-view)
   "Set detail METADATA and STREAM-VIEW data."

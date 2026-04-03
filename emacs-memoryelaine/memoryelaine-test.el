@@ -245,9 +245,61 @@
     (should (= (memoryelaine-state-next-generation) 1))
     (should (= memoryelaine-state--generation 1))))
 
+(ert-deftest memoryelaine-test-state-summary-neighbor-id ()
+  "Neighbor lookup should follow the current summary ordering."
+  (let ((memoryelaine-state--summaries '(((id . 10))
+                                         ((id . 20))
+                                         ((id . 30)))))
+    (should (= (memoryelaine-state-summary-neighbor-id 20 1) 30))
+    (should (= (memoryelaine-state-summary-neighbor-id 20 -1) 10))
+    (should (null (memoryelaine-state-summary-neighbor-id 10 -1)))
+    (should (null (memoryelaine-state-summary-neighbor-id 30 1)))))
+
+(ert-deftest memoryelaine-test-state-detail-init-preserves-generation ()
+  "Reinitializing detail state should not reset request generation."
+  (with-temp-buffer
+    (setq memoryelaine-state--detail-generation 7)
+    (memoryelaine-state-detail-init 99)
+    (should (= memoryelaine-state--detail-generation 7))))
+
 ;;; --- Search formatting tests ---
 
 (ert-deftest memoryelaine-test-search-format-bytes ()
+  "Test byte formatting."
+  (should (equal (memoryelaine-search--format-bytes 0) "—"))
+  (should (equal (memoryelaine-search--format-bytes nil) "—"))
+  (should (equal (memoryelaine-search--format-bytes 512) "512 B"))
+  (should (equal (memoryelaine-search--format-bytes 2048) "2.0 KB"))
+  (should (equal (memoryelaine-search--format-bytes 5242880) "5.0 MB")))
+
+(ert-deftest memoryelaine-test-search-select-entry ()
+  "Selecting an entry should move point onto the matching rendered row."
+  (let ((memoryelaine-search-buffer-name "*memoryelaine-test-search*")
+        (memoryelaine-state--summaries '(((id . 10)
+                                          (ts_start . 1700000000000)
+                                          (request_method . "POST")
+                                          (request_path . "/v1/chat/completions")
+                                          (status_code . 200)
+                                          (duration_ms . 123)
+                                          (req_bytes . 64)
+                                          (resp_bytes . 128))
+                                         ((id . 20)
+                                          (ts_start . 1700000001000)
+                                          (request_method . "GET")
+                                          (request_path . "/v1/models")
+                                          (status_code . 200)
+                                          (duration_ms . 45)
+                                          (req_bytes . 0)
+                                          (resp_bytes . 256)))))
+    (unwind-protect
+        (with-current-buffer (get-buffer-create memoryelaine-search-buffer-name)
+          (memoryelaine-search-mode)
+          (memoryelaine-search--render)
+          (should (memoryelaine-search-select-entry 20))
+          (should (= (tabulated-list-get-id) 20))
+          (should-not (memoryelaine-search-select-entry 999)))
+      (when (get-buffer memoryelaine-search-buffer-name)
+        (kill-buffer memoryelaine-search-buffer-name)))))
 
 (ert-deftest memoryelaine-test-search-fetch-recording-state-normalizes-false ()
   "Fetching recording state should normalize JSON false to nil."
@@ -286,12 +338,6 @@
             (should (equal captured-message "memoryelaine: recording PAUSED"))))
       (when (get-buffer memoryelaine-search-buffer-name)
         (kill-buffer memoryelaine-search-buffer-name)))))
-  "Test byte formatting."
-  (should (equal (memoryelaine-search--format-bytes 0) "—"))
-  (should (equal (memoryelaine-search--format-bytes nil) "—"))
-  (should (equal (memoryelaine-search--format-bytes 512) "512 B"))
-  (should (equal (memoryelaine-search--format-bytes 2048) "2.0 KB"))
-  (should (equal (memoryelaine-search--format-bytes 5242880) "5.0 MB")))
 
 ;;; --- Show formatting tests ---
 
@@ -330,6 +376,31 @@
     (should (string-match-p "\"b\":" rendered))
     (should (string-match-p "\"c\": 2" rendered))))
 
+(ert-deftest memoryelaine-test-show-json-transform-for-display ()
+  "Scan rendering should ellipsize only the intended long JSON strings."
+  (let* ((memoryelaine-show-string-ellipsis-limit 5)
+         (long-value "abcdefghij")
+         (payload `((prompt . ,long-value)
+                    (description . ,long-value)
+                    (messages . [((content . ,long-value)
+                                  (role . "user"))]))))
+    (let ((rendered (memoryelaine-show--json-transform-for-display payload 0 nil)))
+      (should (equal (alist-get 'prompt rendered) "abcde..."))
+      (should (equal (alist-get 'description rendered) long-value))
+      (should (equal (alist-get 'content (aref (alist-get 'messages rendered) 0))
+                     "abcde...")))))
+
+(ert-deftest memoryelaine-test-show-maybe-pretty-print-json-ellipsizes-and-indents ()
+  "Long JSON strings in the detail view should be ellipsized before pretty-printing."
+  (let* ((memoryelaine-show-string-ellipsis-limit 5)
+         (long-value "abcdefghij")
+         (content (format "{\"prompt\":\"%s\",\"messages\":[{\"content\":\"%s\"}]}"
+                          long-value long-value))
+         (rendered (memoryelaine-show--maybe-pretty-print-json content)))
+    (should (string-match-p "\"prompt\": \"abcde\\.\\.\\.\"" rendered))
+    (should (string-match-p "\n  \"messages\":" rendered))
+    (should-not (string-match-p long-value rendered))))
+
 (ert-deftest memoryelaine-test-show-open-request-json-view ()
   "Request JSON view should delegate to the JSON inspector with cached body."
   (with-temp-buffer
@@ -345,6 +416,96 @@
         (memoryelaine-show-open-request-json-view))
       (should (equal captured-title "Log #42 Request JSON"))
       (should (equal captured-body "{\"model\":\"gpt\"}")))))
+
+(ert-deftest memoryelaine-test-show-open-response-json-view ()
+  "Response JSON view should delegate to the JSON inspector with cached body."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42)))
+    (memoryelaine-state-detail-set-body "resp" "raw" "{\"id\":\"resp\"}"
+                                        '((truncated) (included_bytes . 13) (total_bytes . 13)))
+    (let (captured-title captured-body)
+      (cl-letf (((symbol-function 'memoryelaine-json-view-open)
+                 (lambda (title content)
+                   (setq captured-title title
+                         captured-body content))))
+        (memoryelaine-show-open-response-json-view))
+      (should (equal captured-title "Log #42 Response JSON"))
+      (should (equal captured-body "{\"id\":\"resp\"}")))))
+
+(ert-deftest memoryelaine-test-show-open-response-json-view-assembled ()
+  "Response JSON view should follow the current assembled/raw response mode."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42))
+          memoryelaine-state--resp-view-mode 'assembled)
+    (memoryelaine-state-detail-set-body "resp" "assembled" "{\"text\":\"assembled\"}"
+                                        '((truncated) (included_bytes . 20) (total_bytes . 20)))
+    (let (captured-title captured-body)
+      (cl-letf (((symbol-function 'memoryelaine-json-view-open)
+                 (lambda (title content)
+                   (setq captured-title title
+                         captured-body content))))
+        (memoryelaine-show-open-response-json-view))
+      (should (equal captured-title "Log #42 Assembled Response JSON"))
+      (should (equal captured-body "{\"text\":\"assembled\"}")))))
+
+(ert-deftest memoryelaine-test-show-copy-request-headers ()
+  "Request headers copy should use compact JSON."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata
+          '((req_headers . (("Content-Type" . "application/json")
+                            ("X-Test" . ("a" "b"))))))
+    (let (captured)
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (content) (setq captured content)))
+                ((symbol-function 'message) #'ignore))
+        (memoryelaine-show-copy-request-headers))
+      (should (equal captured
+                     "{\"Content-Type\":\"application/json\",\"X-Test\":[\"a\",\"b\"]}")))))
+
+(ert-deftest memoryelaine-test-show-copy-response-body-follows-current-view ()
+  "Response body copy should follow the current raw or assembled response mode."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42))
+          memoryelaine-state--resp-view-mode 'assembled)
+    (memoryelaine-state-detail-set-body "resp" "assembled" "{\"text\":\"assembled\"}"
+                                        '((truncated) (included_bytes . 20) (total_bytes . 20)))
+    (let (captured)
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (content) (setq captured content)))
+                ((symbol-function 'message) #'ignore))
+        (memoryelaine-show-copy-response-body))
+      (should (equal captured "{\"text\":\"assembled\"}")))))
+
+(ert-deftest memoryelaine-test-show-section-navigation ()
+  "Section navigation should move between tracked show buffer headings."
+  (with-temp-buffer
+    (memoryelaine-show-mode)
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata
+          '((ts_start . 1700000000000)
+            (ts_end . 1700000001000)
+            (duration_ms . 1000)
+            (client_ip . "127.0.0.1")
+            (request_method . "POST")
+            (request_path . "/v1/chat/completions")
+            (upstream_url . "http://example.test")
+            (status_code . 200)
+            (req_headers . (("Content-Type" . "application/json")))
+            (resp_headers . (("Content-Type" . "application/json")))
+            (req_bytes . 10)
+            (resp_bytes . 20)))
+    (memoryelaine-show--render)
+    (goto-char (point-min))
+    (memoryelaine-show-next-section)
+    (should (looking-at-p "─── Request Headers ───"))
+    (memoryelaine-show-next-section)
+    (should (looking-at-p "─── Request Body"))
+    (memoryelaine-show-previous-section)
+    (should (looking-at-p "─── Request Headers ───"))))
 
 (provide 'memoryelaine-test)
 ;;; memoryelaine-test.el ends here

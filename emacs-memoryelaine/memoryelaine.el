@@ -74,6 +74,16 @@ Called with one argument: the entry ID (integer)."
   :type 'function
   :group 'memoryelaine)
 
+(defcustom memoryelaine-show-string-ellipsis-limit 60
+  "Maximum visible length for long JSON string leaves in the detail view.
+
+This only affects the scan-oriented `*memoryelaine-entry*' rendering.
+The dedicated JSON inspector opened with `j' or `J' still shows the full
+unmodified JSON body."
+  :type '(choice (const :tag "Disable truncation" nil)
+                 integer)
+  :group 'memoryelaine)
+
 (require 'memoryelaine-log)
 (require 'memoryelaine-auth)
 (require 'memoryelaine-http)

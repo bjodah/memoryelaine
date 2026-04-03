@@ -37,11 +37,16 @@
     (user-error "memoryelaine: JSON tree-sitter grammar is unavailable"))
   (unless (require 'treesit-fold nil t)
     (user-error "memoryelaine: treesit-fold is not installed"))
-  (let ((buf (get-buffer-create memoryelaine-json-view-buffer-name)))
+  (let ((buf (get-buffer-create memoryelaine-json-view-buffer-name))
+        (pretty-content (condition-case err
+                            (memoryelaine-json-view--pretty-format content)
+                          (error
+                           (user-error "memoryelaine: content is not valid JSON (%s)"
+                                       (error-message-string err))))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (memoryelaine-json-view--pretty-format content))
+        (insert pretty-content)
         (goto-char (point-min))
         (json-ts-mode)
         (treesit-fold-mode 1)

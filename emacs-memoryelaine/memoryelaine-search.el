@@ -175,6 +175,21 @@
     (when entry
       (funcall (symbol-value 'memoryelaine-show-entry-function) entry))))
 
+(defun memoryelaine-search-select-entry (entry-id)
+  "Move point to ENTRY-ID in the search buffer.
+Return non-nil when the row is present in the current rendered page."
+  (let ((buf (get-buffer memoryelaine-search-buffer-name))
+        found)
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (goto-char (point-min))
+        (while (and (not found) (not (eobp)))
+          (when (equal (tabulated-list-get-id) entry-id)
+            (setq found t))
+          (unless found
+            (forward-line 1)))))
+    found))
+
 (defun memoryelaine-search-refresh ()
   "Refresh the current search results."
   (interactive)
