@@ -10,6 +10,7 @@ import (
 
 	"memoryelaine/internal/chat"
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/jsonellipsis"
 	"memoryelaine/internal/query"
 	"memoryelaine/internal/recording"
 	"memoryelaine/internal/streamview"
@@ -231,6 +232,13 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 	fullParam := r.URL.Query().Get("full")
 	full := fullParam == "true" || fullParam == "1"
 
+	ellipsisLimit := 0
+	if v := r.URL.Query().Get("ellipsis"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ellipsisLimit = n
+		}
+	}
+
 	entry, err := reader.GetByID(id)
 	if err != nil {
 		writeAPIError(w, http.StatusNotFound, "not_found", "log entry not found")
@@ -242,57 +250,66 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 	resp.Mode = mode
 	resp.Full = full
 
+	// Resolve the canonical source body.
+	var sourceBody string
+	var available bool
 	switch {
 	case part == "req":
 		resp.TotalBytes = entry.ReqBytes
-		body := entry.ReqBody
-		if body == "" {
-			resp.Available = false
+		if entry.ReqBody == "" {
 			resp.Reason = "no request body"
 		} else {
-			resp.Available = true
-			content := body
-			if !full && len(content) > previewBytes {
-				content = content[:previewBytes]
-				resp.Truncated = true
-			}
-			resp.Content = content
-			resp.IncludedBytes = len(content)
+			sourceBody = entry.ReqBody
+			available = true
 		}
 
 	case part == "resp" && mode == "raw":
 		resp.TotalBytes = entry.RespBytes
 		if entry.RespBody == nil || *entry.RespBody == "" {
-			resp.Available = false
 			resp.Reason = "no response body"
 		} else {
-			resp.Available = true
-			content := *entry.RespBody
-			if !full && len(content) > previewBytes {
-				content = content[:previewBytes]
-				resp.Truncated = true
-			}
-			resp.Content = content
-			resp.IncludedBytes = len(content)
+			sourceBody = *entry.RespBody
+			available = true
 		}
 
 	case part == "resp" && mode == "assembled":
 		resp.TotalBytes = entry.RespBytes
 		sv := streamview.Build(entry)
 		if !sv.AssembledAvailable {
-			resp.Available = false
 			resp.Reason = string(sv.Reason)
 		} else {
-			resp.Available = true
-			content := sv.AssembledBody
-			if !full && len(content) > previewBytes {
-				content = content[:previewBytes]
-				resp.Truncated = true
-			}
-			resp.Content = content
-			resp.IncludedBytes = len(content)
+			sourceBody = sv.AssembledBody
+			available = true
 			resp.TotalBytes = int64(len(sv.AssembledBody))
 		}
+	}
+
+	resp.Available = available
+
+	if available {
+		content := sourceBody
+		resp.Complete = true
+
+		// Try display-ellipsis transform on the full source body.
+		if ellipsisLimit > 0 {
+			if transformed, changed, tErr := jsonellipsis.Transform(
+				[]byte(sourceBody), ellipsisLimit, jsonellipsis.DefaultKeys, jsonellipsis.DefaultMinDepth,
+			); tErr == nil && changed {
+				content = string(transformed)
+				resp.Ellipsized = true
+				resp.Complete = false
+			}
+		}
+
+		// Enforce preview size limit (applies to both ellipsized and plain content).
+		if !full && len(content) > previewBytes {
+			content = content[:previewBytes]
+			resp.Truncated = true
+			resp.Complete = false
+		}
+
+		resp.Content = content
+		resp.IncludedBytes = len(content)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

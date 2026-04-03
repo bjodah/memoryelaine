@@ -51,11 +51,11 @@ func Load(cfgPath string) (*Config, error) {
 	v := viper.New()
 
 	// Defaults
-	v.SetDefault("proxy.listen_addr", "0.0.0.0:13844")
+	v.SetDefault("proxy.listen_addr", "0.0.0.0:8688")
 	v.SetDefault("proxy.upstream_base_url", "https://api.openai.com")
 	v.SetDefault("proxy.timeout_minutes", 23)
 	v.SetDefault("proxy.log_paths", []string{"/v1/chat/completions", "/v1/completions"})
-	v.SetDefault("management.listen_addr", "0.0.0.0:13845")
+	v.SetDefault("management.listen_addr", "0.0.0.0:8677")
 	v.SetDefault("management.auth.username", "admin")
 	v.SetDefault("management.auth.password", "changeme")
 	v.SetDefault("management.preview_bytes", 65536)

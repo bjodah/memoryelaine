@@ -2,9 +2,9 @@
 
 ;; Author: memoryelaine contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools, convenience
-;; URL: https://github.com/memoryelaine/memoryelaine
+;; URL: https://github.com/bjodah/memoryelaine
 
 ;;; Commentary:
 
@@ -20,7 +20,7 @@
   :group 'tools
   :prefix "memoryelaine-")
 
-(defcustom memoryelaine-base-url "http://localhost:13845"
+(defcustom memoryelaine-base-url "http://localhost:8677"
   "Base URL of the memoryelaine management API."
   :type 'string
   :group 'memoryelaine)
@@ -72,6 +72,17 @@ When nil, auth-source is tried first."
   "Function called to display a log entry detail.
 Called with one argument: the entry ID (integer)."
   :type 'function
+  :group 'memoryelaine)
+
+(defcustom memoryelaine-show-string-ellipsis-limit 60
+  "Maximum visible length for long JSON string leaves in the detail view.
+
+Sent as `?ellipsis=N' on preview/display body fetches so the server
+performs the truncation.  Does not affect canonical full-body fetches
+used by `j'/`J' (JSON inspector) or raw copy commands.  Set to nil to
+disable display ellipsis."
+  :type '(choice (const :tag "Disable truncation" nil)
+                 integer)
   :group 'memoryelaine)
 
 (require 'memoryelaine-log)

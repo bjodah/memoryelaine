@@ -75,6 +75,8 @@ type BodyResponse struct {
 	IncludedBytes int    `json:"included_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	Truncated     bool   `json:"truncated"`
+	Ellipsized    bool   `json:"ellipsized,omitempty"`
+	Complete      bool   `json:"complete"`
 	Available     bool   `json:"available"`
 	Reason        string `json:"reason,omitempty"`
 }

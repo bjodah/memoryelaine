@@ -11,7 +11,7 @@ import (
 )
 
 func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
-	return Model{
+	m := Model{
 		mode:   modeDetail,
 		detail: entry,
 		streamView: streamViewState{
@@ -21,6 +21,8 @@ func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
 		width:  120,
 		height: 40,
 	}
+	m.recomputeDetailBodies()
+	return m
 }
 
 func sampleEntry() *database.LogEntry {
@@ -170,5 +172,38 @@ func TestDetailView_AssembledTextRendered(t *testing.T) {
 	}
 	if strings.Contains(output, "data: SSE chunks") {
 		t.Error("should not show raw SSE data in assembled mode")
+	}
+}
+
+func TestEllipsizeBody_JSON(t *testing.T) {
+	body := `{"prompt":"` + strings.Repeat("a", 200) + `","model":"gpt-4"}`
+	result := ellipsizeBody(body, 10000)
+	if strings.Contains(result, strings.Repeat("a", 200)) {
+		t.Error("expected long prompt value to be ellipsized")
+	}
+	if !strings.Contains(result, "...") {
+		t.Error("expected ellipsis marker in output")
+	}
+	if !strings.Contains(result, "gpt-4") {
+		t.Error("expected short values to be preserved")
+	}
+}
+
+func TestEllipsizeBody_NonJSON(t *testing.T) {
+	body := "plain text body"
+	result := ellipsizeBody(body, 10000)
+	if result != body {
+		t.Errorf("expected non-JSON to pass through unchanged, got %q", result)
+	}
+}
+
+func TestEllipsizeBody_NoChanges(t *testing.T) {
+	body := `{"model":"gpt-4"}`
+	result := ellipsizeBody(body, 10000)
+	if !strings.Contains(result, "gpt-4") {
+		t.Error("expected short JSON to pass through unchanged")
+	}
+	if strings.Contains(result, "...") {
+		t.Error("expected no ellipsis for short values")
 	}
 }
