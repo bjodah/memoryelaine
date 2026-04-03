@@ -20,8 +20,8 @@ Here's a sample setup:
   :init
   (setq memoryelaine-base-url
         (if (member (getenv "container") '("podman" "docker"))
-            "http://host.docker.internal:13845"
-          "http://localhost:13845"))
+            "http://host.docker.internal:8677"
+          "http://localhost:8677"))
   :custom
   (memoryelaine-password "changeme")
   (memoryelaine-username "admin"))

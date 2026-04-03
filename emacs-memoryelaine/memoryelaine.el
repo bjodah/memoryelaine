@@ -20,7 +20,7 @@
   :group 'tools
   :prefix "memoryelaine-")
 
-(defcustom memoryelaine-base-url "http://localhost:13845"
+(defcustom memoryelaine-base-url "http://localhost:8677"
   "Base URL of the memoryelaine management API."
   :type 'string
   :group 'memoryelaine)

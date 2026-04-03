@@ -82,7 +82,7 @@ func TestLoad_DefaultsNoExplicitPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Proxy.ListenAddr != "0.0.0.0:13844" {
+	if cfg.Proxy.ListenAddr != "0.0.0.0:8688" {
 		t.Errorf("expected default listen_addr, got %s", cfg.Proxy.ListenAddr)
 	}
 	if cfg.Logging.MaxCaptureBytes != 8388608 {
@@ -101,11 +101,11 @@ func TestLoad_ExpandsDatabasePathHomeDir(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "https://example.com"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13845"
+  listen_addr: ":8677"
 database:
   path: "~/.cache/memel.db"
 logging:
@@ -134,11 +134,11 @@ func TestLoad_ExpandsDatabasePathBareHomeDir(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "https://example.com"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13845"
+  listen_addr: ":8677"
 database:
   path: "~"
 logging:
@@ -163,11 +163,11 @@ func TestValidate_BadURL(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "not-a-url"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13845"
+  listen_addr: ":8677"
 logging:
   max_capture_bytes: 1024
 `
@@ -185,11 +185,11 @@ func TestValidate_PortCollision(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "https://example.com"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
 logging:
   max_capture_bytes: 1024
 `
@@ -207,11 +207,11 @@ func TestValidate_ZeroCaptureBytes(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "https://example.com"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13845"
+  listen_addr: ":8677"
 logging:
   max_capture_bytes: 0
 `
@@ -229,11 +229,11 @@ func TestValidate_BadLogLevel(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	data := `
 proxy:
-  listen_addr: ":13844"
+  listen_addr: ":8688"
   upstream_base_url: "https://example.com"
   log_paths: ["/test"]
 management:
-  listen_addr: ":13845"
+  listen_addr: ":8677"
 logging:
   max_capture_bytes: 1024
   level: "verbose"

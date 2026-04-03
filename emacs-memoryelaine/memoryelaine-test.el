@@ -73,7 +73,7 @@
 
 (ert-deftest memoryelaine-test-auth-url-host ()
   "Test host extraction from base URL."
-  (let ((memoryelaine-base-url "http://myhost:13845"))
+  (let ((memoryelaine-base-url "http://myhost:8677"))
     (should (equal (memoryelaine-auth--url-host) "myhost"))))
 
 ;;; --- HTTP tests ---
@@ -117,9 +117,9 @@
 
 (ert-deftest memoryelaine-test-http-build-url ()
   "Test URL building with params."
-  (let ((memoryelaine-base-url "http://localhost:13845"))
+  (let ((memoryelaine-base-url "http://localhost:8677"))
     (should (equal (memoryelaine-http--build-url "/api/logs" nil)
-                   "http://localhost:13845/api/logs"))
+                   "http://localhost:8677/api/logs"))
     (let ((url (memoryelaine-http--build-url "/api/logs"
                                              '(("limit" . "50") ("offset" . "0")))))
       (should (string-match-p "limit=50" url))

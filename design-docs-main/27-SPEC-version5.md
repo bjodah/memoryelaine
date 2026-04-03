@@ -397,7 +397,7 @@ Example:
 
 ```yaml
 proxy:
-  listen_addr: "0.0.0.0:13844"
+  listen_addr: "0.0.0.0:8688"
   upstream_base_url: "https://api.openai.com"
   timeout_minutes: 23
   log_paths:
@@ -405,7 +405,7 @@ proxy:
     - "/v1/completions"
 
 management:
-  listen_addr: "0.0.0.0:13845"
+  listen_addr: "0.0.0.0:8677"
   auth:
     username: "admin"
     password: "changeme"
