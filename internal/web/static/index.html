@@ -43,6 +43,46 @@
                 <div id="detail-content"></div>
             </div>
         </div>
+        <div id="help-overlay" class="hidden">
+            <div class="help-panel">
+                <button id="close-help">✕</button>
+                <h2>Keyboard Shortcuts</h2>
+                <div class="help-section">
+                    <h3>Main View</h3>
+                    <div class="help-shortcut-row"><kbd>j</kbd><span>Select next row</span></div>
+                    <div class="help-shortcut-row"><kbd>k</kbd><span>Select previous row</span></div>
+                    <div class="help-shortcut-row"><kbd>Enter</kbd><span>Open selected row</span></div>
+                    <div class="help-shortcut-row"><kbd>/</kbd><span>Focus query input</span></div>
+                    <div class="help-shortcut-row"><kbd>R</kbd><span>Toggle recording</span></div>
+                    <div class="help-shortcut-row"><kbd>h</kbd><span>Open this help</span></div>
+                </div>
+                <div class="help-section">
+                    <h3>Detail View</h3>
+                    <div class="help-shortcut-row"><span><kbd>Esc</kbd> / <kbd>u</kbd> / <kbd>q</kbd></span><span>Close detail</span></div>
+                    <div class="help-shortcut-row"><span><kbd>n</kbd> / <kbd>p</kbd></span><span>Scroll down/up</span></div>
+                    <div class="help-shortcut-row"><kbd>v</kbd><span>Toggle raw and assembled response view</span></div>
+                    <div class="help-shortcut-row"><kbd>c</kbd><span>Open conversation view</span></div>
+                    <div class="help-shortcut-row"><kbd>t</kbd><span>Load full visible bodies</span></div>
+                    <div class="help-shortcut-row"><span><kbd>j</kbd> / <kbd>J</kbd></span><span>Open request/response body inspector</span></div>
+                    <div class="help-shortcut-row"><span><kbd>w</kbd> then <kbd>h</kbd> / <kbd>b</kbd> / <kbd>H</kbd> / <kbd>B</kbd></span><span>Copy request headers/body or response headers/body</span></div>
+                </div>
+                <h2>Query DSL</h2>
+                <div class="help-section">
+                    <div class="help-shortcut-row"><code>status:200</code><span>Filter by exact status code</span></div>
+                    <div class="help-shortcut-row"><code>status:4xx</code><span>Filter by status family</span></div>
+                    <div class="help-shortcut-row"><code>method:POST</code><span>Filter by HTTP method</span></div>
+                    <div class="help-shortcut-row"><code>path:/v1/chat/completions</code><span>Filter by request path</span></div>
+                    <div class="help-shortcut-row"><code>since:1h</code><span>Entries newer than one hour</span></div>
+                    <div class="help-shortcut-row"><code>until:24h</code><span>Entries older than twenty four hours</span></div>
+                    <div class="help-shortcut-row"><code>is:error</code><span>Only error entries</span></div>
+                    <div class="help-shortcut-row"><code>has:req has:resp</code><span>Entries with request and response bodies</span></div>
+                    <div class="help-shortcut-row"><code>-status:500</code><span>Negate a filter</span></div>
+                    <div class="help-shortcut-row"><code>"exact phrase"</code><span>Quoted phrase search</span></div>
+                    <div class="help-shortcut-row"><code>status:2xx method:POST path:/chat hello world</code><span>Combine multiple filters and free text</span></div>
+                </div>
+            </div>
+        </div>
+        <div class="keyboard-hint">press <kbd>h</kbd> to show help</div>
     </div>
     <script src="app.js"></script>
 </body>
