@@ -124,10 +124,13 @@
             const sv = data.stream_view;
             let currentMode = 'raw';
 
-            async function fetchBody(part, mode, full) {
+            const ELLIPSIS_LIMIT = 120;
+
+            async function fetchBody(part, mode, full, ellipsis) {
                 let url = `/api/logs/${id}/body?part=${part}`;
                 if (mode) url += `&mode=${mode}`;
                 if (full) url += `&full=true`;
+                if (ellipsis && ellipsis > 0) url += `&ellipsis=${ellipsis}`;
                 const r = await fetch(url);
                 if (!r.ok) {
                     const err = await r.json().catch(() => null);
@@ -155,7 +158,7 @@
                 loadBtn.addEventListener('click', async () => {
                     container.innerHTML = '<em>Loading…</em>';
                     try {
-                        const bodyData = await fetchBody(part, currentMode === 'assembled' && part === 'resp' ? 'assembled' : 'raw', false);
+                        const bodyData = await fetchBody(part, currentMode === 'assembled' && part === 'resp' ? 'assembled' : 'raw', false, ELLIPSIS_LIMIT);
                         renderBodyContent(container, bodyData, part);
                     } catch (e) {
                         container.innerHTML = '<em>Error: ' + escapeHTML(e.message) + '</em>';
@@ -171,14 +174,20 @@
                 }
                 const info = document.createElement('div');
                 info.className = 'body-info';
-                info.textContent = formatBytes(bodyData.included_bytes) + ' / ' + formatBytes(bodyData.total_bytes) + ' total';
+                let infoText = formatBytes(bodyData.included_bytes) + ' / ' + formatBytes(bodyData.total_bytes) + ' total';
+                if (bodyData.truncated) {
+                    infoText += ' (preview)';
+                } else if (bodyData.ellipsized) {
+                    infoText += ' (long strings shortened)';
+                }
+                info.textContent = infoText;
                 container.appendChild(info);
 
                 const pre = document.createElement('pre');
                 pre.textContent = bodyData.content;
                 container.appendChild(pre);
 
-                if (bodyData.truncated) {
+                if (!bodyData.complete) {
                     const fullBtn = document.createElement('button');
                     fullBtn.textContent = 'Load Full';
                     fullBtn.className = 'load-body-btn';
@@ -253,14 +262,14 @@
                     if (!container) return;
                     if (currentMode === 'assembled' && sv.assembled_available) {
                         container.innerHTML = '<em>Loading…</em>';
-                        fetchBody('resp', 'assembled', false).then(bodyData => {
+                        fetchBody('resp', 'assembled', false, ELLIPSIS_LIMIT).then(bodyData => {
                             renderBodyContent(container, bodyData, 'resp');
                         }).catch(e => {
                             container.innerHTML = '<em>Error: ' + escapeHTML(e.message) + '</em>';
                         });
                     } else if (currentMode === 'raw') {
                         container.innerHTML = '<em>Loading…</em>';
-                        fetchBody('resp', 'raw', false).then(bodyData => {
+                        fetchBody('resp', 'raw', false, ELLIPSIS_LIMIT).then(bodyData => {
                             renderBodyContent(container, bodyData, 'resp');
                         }).catch(e => {
                             container.innerHTML = '<em>Error: ' + escapeHTML(e.message) + '</em>';

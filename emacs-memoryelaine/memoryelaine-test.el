@@ -217,12 +217,14 @@
   (with-temp-buffer
     (memoryelaine-state-detail-init 1)
     (memoryelaine-state-detail-set-body "req" "raw" "request body"
-                                        '((truncated . t) (included_bytes . 100) (total_bytes . 500)))
+                                        '((complete . :false) (truncated . t)
+                                          (included_bytes . 100) (total_bytes . 500)))
     (should (equal memoryelaine-state--req-body "request body"))
     (should (eq memoryelaine-state--req-body-state 'preview))
     ;; Now set full body
     (memoryelaine-state-detail-set-body "req" "raw" "full request body"
-                                        '((truncated) (included_bytes . 500) (total_bytes . 500)))
+                                        '((complete . t) (truncated)
+                                          (included_bytes . 500) (total_bytes . 500)))
     (should (eq memoryelaine-state--req-body-state 'full))))
 
 (ert-deftest memoryelaine-test-state-detail-set-body-assembled ()
@@ -230,9 +232,11 @@
   (with-temp-buffer
     (memoryelaine-state-detail-init 1)
     (memoryelaine-state-detail-set-body "resp" "raw" "raw body"
-                                        '((truncated . t) (included_bytes . 100) (total_bytes . 500)))
+                                        '((complete . :false) (truncated . t)
+                                          (included_bytes . 100) (total_bytes . 500)))
     (memoryelaine-state-detail-set-body "resp" "assembled" "assembled body"
-                                        '((truncated . t) (included_bytes . 12) (total_bytes . 24)))
+                                        '((complete . :false) (truncated . t)
+                                          (included_bytes . 12) (total_bytes . 24)))
     (should (equal memoryelaine-state--resp-body "raw body"))
     (should (equal memoryelaine-state--resp-body-assembled "assembled body"))
     (should (eq memoryelaine-state--resp-body-state 'preview))
@@ -361,9 +365,11 @@
     (memoryelaine-state-detail-init 1)
     (setq memoryelaine-state--resp-view-mode 'assembled)
     (memoryelaine-state-detail-set-body "resp" "raw" "raw body"
-                                        '((truncated . t) (included_bytes . 100) (total_bytes . 500)))
+                                        '((complete . :false) (truncated . t)
+                                          (included_bytes . 100) (total_bytes . 500)))
     (memoryelaine-state-detail-set-body "resp" "assembled" "assembled body"
-                                        '((truncated . t) (included_bytes . 12) (total_bytes . 24)))
+                                        '((complete . :false) (truncated . t)
+                                          (included_bytes . 12) (total_bytes . 24)))
     (memoryelaine-show--insert-body "resp")
     (let ((rendered (buffer-string)))
       (should (string-match-p "12 B / 24 B" rendered))
@@ -376,30 +382,12 @@
     (should (string-match-p "\"b\":" rendered))
     (should (string-match-p "\"c\": 2" rendered))))
 
-(ert-deftest memoryelaine-test-show-json-transform-for-display ()
-  "Scan rendering should ellipsize only the intended long JSON strings."
-  (let* ((memoryelaine-show-string-ellipsis-limit 5)
-         (long-value "abcdefghij")
-         (payload `((prompt . ,long-value)
-                    (description . ,long-value)
-                    (messages . [((content . ,long-value)
-                                  (role . "user"))]))))
-    (let ((rendered (memoryelaine-show--json-transform-for-display payload 0 nil)))
-      (should (equal (alist-get 'prompt rendered) "abcde..."))
-      (should (equal (alist-get 'description rendered) long-value))
-      (should (equal (alist-get 'content (aref (alist-get 'messages rendered) 0))
-                     "abcde...")))))
-
-(ert-deftest memoryelaine-test-show-maybe-pretty-print-json-ellipsizes-and-indents ()
-  "Long JSON strings in the detail view should be ellipsized before pretty-printing."
-  (let* ((memoryelaine-show-string-ellipsis-limit 5)
-         (long-value "abcdefghij")
-         (content (format "{\"prompt\":\"%s\",\"messages\":[{\"content\":\"%s\"}]}"
-                          long-value long-value))
+(ert-deftest memoryelaine-test-show-maybe-pretty-print-json-indents ()
+  "JSON in the detail view should be pretty-printed."
+  (let* ((content "{\"model\":\"gpt-4\",\"messages\":[{\"role\":\"user\"}]}")
          (rendered (memoryelaine-show--maybe-pretty-print-json content)))
-    (should (string-match-p "\"prompt\": \"abcde\\.\\.\\.\"" rendered))
-    (should (string-match-p "\n  \"messages\":" rendered))
-    (should-not (string-match-p long-value rendered))))
+    (should (string-match-p "\"model\": \"gpt-4\"" rendered))
+    (should (string-match-p "\n  \"messages\":" rendered))))
 
 (ert-deftest memoryelaine-test-show-open-request-json-view ()
   "Request JSON view should delegate to the JSON inspector with cached body."
@@ -407,7 +395,7 @@
     (memoryelaine-state-detail-init 42)
     (setq memoryelaine-state--metadata '((id . 42)))
     (memoryelaine-state-detail-set-body "req" "raw" "{\"model\":\"gpt\"}"
-                                        '((truncated) (included_bytes . 15) (total_bytes . 15)))
+                                        '((complete . t) (included_bytes . 15) (total_bytes . 15)))
     (let (captured-title captured-body)
       (cl-letf (((symbol-function 'memoryelaine-json-view-open)
                  (lambda (title content)
@@ -423,7 +411,7 @@
     (memoryelaine-state-detail-init 42)
     (setq memoryelaine-state--metadata '((id . 42)))
     (memoryelaine-state-detail-set-body "resp" "raw" "{\"id\":\"resp\"}"
-                                        '((truncated) (included_bytes . 13) (total_bytes . 13)))
+                                        '((complete . t) (included_bytes . 13) (total_bytes . 13)))
     (let (captured-title captured-body)
       (cl-letf (((symbol-function 'memoryelaine-json-view-open)
                  (lambda (title content)
@@ -440,7 +428,7 @@
     (setq memoryelaine-state--metadata '((id . 42))
           memoryelaine-state--resp-view-mode 'assembled)
     (memoryelaine-state-detail-set-body "resp" "assembled" "{\"text\":\"assembled\"}"
-                                        '((truncated) (included_bytes . 20) (total_bytes . 20)))
+                                        '((complete . t) (included_bytes . 20) (total_bytes . 20)))
     (let (captured-title captured-body)
       (cl-letf (((symbol-function 'memoryelaine-json-view-open)
                  (lambda (title content)
@@ -472,7 +460,7 @@
     (setq memoryelaine-state--metadata '((id . 42))
           memoryelaine-state--resp-view-mode 'assembled)
     (memoryelaine-state-detail-set-body "resp" "assembled" "{\"text\":\"assembled\"}"
-                                        '((truncated) (included_bytes . 20) (total_bytes . 20)))
+                                        '((complete . t) (included_bytes . 20) (total_bytes . 20)))
     (let (captured)
       (cl-letf (((symbol-function 'kill-new)
                  (lambda (content) (setq captured content)))
@@ -506,6 +494,101 @@
     (should (looking-at-p "─── Request Body"))
     (memoryelaine-show-previous-section)
     (should (looking-at-p "─── Request Headers ───"))))
+
+(ert-deftest memoryelaine-test-show-next-entry-direction ()
+  "Next entry should use +1 direction."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 20)
+    (let ((memoryelaine-state--summaries '(((id . 10))
+                                           ((id . 20))
+                                           ((id . 30)))))
+      (let (called-with)
+        (cl-letf (((symbol-function 'memoryelaine-show--open-neighbor-entry)
+                   (lambda (dir) (setq called-with dir))))
+          (memoryelaine-show-next-entry))
+        (should (= called-with 1))))))
+
+(ert-deftest memoryelaine-test-show-previous-entry-direction ()
+  "Previous entry should use -1 direction."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 20)
+    (let ((memoryelaine-state--summaries '(((id . 10))
+                                           ((id . 20))
+                                           ((id . 30)))))
+      (let (called-with)
+        (cl-letf (((symbol-function 'memoryelaine-show--open-neighbor-entry)
+                   (lambda (dir) (setq called-with dir))))
+          (memoryelaine-show-previous-entry))
+        (should (= called-with -1))))))
+
+(ert-deftest memoryelaine-test-show-fetch-body-passes-ellipsis ()
+  "Preview/display body requests should include the ellipsis parameter."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (let ((memoryelaine-show-string-ellipsis-limit 60)
+          captured-params)
+      (cl-letf (((symbol-function 'memoryelaine-http-get)
+                 (lambda (_url params _callback) (setq captured-params params))))
+        (memoryelaine-show--fetch-body 1 "req" "raw" nil))
+      (should (assoc "ellipsis" captured-params))
+      (should (equal (cdr (assoc "ellipsis" captured-params)) "60")))))
+
+(ert-deftest memoryelaine-test-show-fetch-body-no-ellipsis-when-full ()
+  "Canonical full body requests should not include the ellipsis parameter."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (let ((memoryelaine-show-string-ellipsis-limit 60)
+          captured-params)
+      (cl-letf (((symbol-function 'memoryelaine-http-get)
+                 (lambda (_url params _callback) (setq captured-params params))))
+        (memoryelaine-show--fetch-body 1 "req" "raw" t))
+      (should-not (assoc "ellipsis" captured-params))
+      (should (assoc "full" captured-params)))))
+
+(ert-deftest memoryelaine-test-state-detail-set-body-complete-means-full ()
+  "Body info with complete=t should map to full state."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (memoryelaine-state-detail-set-body "req" "raw" "body"
+                                        '((complete . t) (included_bytes . 10) (total_bytes . 10)))
+    (should (eq memoryelaine-state--req-body-state 'full))))
+
+(ert-deftest memoryelaine-test-state-detail-set-body-ellipsized-means-preview ()
+  "Body info with ellipsized=t and complete=false should map to preview state."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 1)
+    (memoryelaine-state-detail-set-body "req" "raw" "body"
+                                        '((complete . :false) (ellipsized . t)
+                                          (included_bytes . 10) (total_bytes . 100)))
+    (should (eq memoryelaine-state--req-body-state 'preview))))
+
+(ert-deftest memoryelaine-test-show-json-view-auto-fetches-when-incomplete ()
+  "JSON inspector should trigger auto-fetch when body is not complete."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42)))
+    (memoryelaine-state-detail-set-body "req" "raw" "{\"model\":\"gpt\"}"
+                                        '((complete . :false) (ellipsized . t)
+                                          (included_bytes . 15) (total_bytes . 15)))
+    (let (fetch-called)
+      (cl-letf (((symbol-function 'memoryelaine-http-get)
+                 (lambda (_url _params _callback) (setq fetch-called t))))
+        (memoryelaine-show-open-request-json-view))
+      (should fetch-called))))
+
+(ert-deftest memoryelaine-test-show-copy-body-auto-fetches-when-incomplete ()
+  "Raw body copy should trigger auto-fetch when body is not complete."
+  (with-temp-buffer
+    (memoryelaine-state-detail-init 42)
+    (setq memoryelaine-state--metadata '((id . 42)))
+    (memoryelaine-state-detail-set-body "req" "raw" "{\"model\":\"gpt\"}"
+                                        '((complete . :false) (ellipsized . t)
+                                          (included_bytes . 15) (total_bytes . 15)))
+    (let (fetch-called)
+      (cl-letf (((symbol-function 'memoryelaine-http-get)
+                 (lambda (_url _params _callback) (setq fetch-called t))))
+        (memoryelaine-show-copy-request-body))
+      (should fetch-called))))
 
 (provide 'memoryelaine-test)
 ;;; memoryelaine-test.el ends here

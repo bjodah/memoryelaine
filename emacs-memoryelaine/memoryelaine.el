@@ -77,9 +77,10 @@ Called with one argument: the entry ID (integer)."
 (defcustom memoryelaine-show-string-ellipsis-limit 60
   "Maximum visible length for long JSON string leaves in the detail view.
 
-This only affects the scan-oriented `*memoryelaine-entry*' rendering.
-The dedicated JSON inspector opened with `j' or `J' still shows the full
-unmodified JSON body."
+Sent as `?ellipsis=N' on preview/display body fetches so the server
+performs the truncation.  Does not affect canonical full-body fetches
+used by `j'/`J' (JSON inspector) or raw copy commands.  Set to nil to
+disable display ellipsis."
   :type '(choice (const :tag "Disable truncation" nil)
                  integer)
   :group 'memoryelaine)

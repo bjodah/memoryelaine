@@ -168,7 +168,7 @@ DIRECTION should be 1 for the next entry or -1 for the previous entry."
 (defun memoryelaine-state-detail-set-body (part mode content body-info)
   "Cache body CONTENT and BODY-INFO for PART and MODE.
 PART is \"req\" or \"resp\".  MODE is \"raw\" or \"assembled\"."
-  (let ((full (not (alist-get 'truncated body-info))))
+  (let ((full (eq (alist-get 'complete body-info) t)))
     (pcase part
       ("req"
        (setq memoryelaine-state--req-body content

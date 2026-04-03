@@ -22,10 +22,6 @@
 (defvar-local memoryelaine-show--section-positions nil
   "Sorted list of section start positions in the current detail buffer.")
 
-(defconst memoryelaine-show--truncate-at-any-depth-keys
-  '("prompt" "content" "text" "arguments" "input" "output")
-  "JSON keys whose string values should be ellipsized even near the root.")
-
 (defvar memoryelaine-show-copy-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "h") #'memoryelaine-show-copy-request-headers)
@@ -113,6 +109,14 @@ FULL is non-nil to fetch the complete body."
                   ("mode" . ,mode))))
     (when full
       (push '("full" . "true") params))
+    ;; Pass ellipsis on preview/display fetches (not canonical full).
+    (when (and (not full)
+               (boundp 'memoryelaine-show-string-ellipsis-limit)
+               (integerp (symbol-value 'memoryelaine-show-string-ellipsis-limit))
+               (> (symbol-value 'memoryelaine-show-string-ellipsis-limit) 0))
+      (push (cons "ellipsis"
+                   (number-to-string (symbol-value 'memoryelaine-show-string-ellipsis-limit)))
+            params))
     (memoryelaine-http-get
      (format "/api/logs/%d/body" entry-id) params
      (lambda (status data err)
@@ -241,81 +245,19 @@ FULL is non-nil to fetch the complete body."
                           (format "%s" val))))))))
 
 (defun memoryelaine-show--maybe-pretty-print-json (content)
-  "Attempt to pretty-print CONTENT as JSON. Return formatted string or original."
+  "Attempt to pretty-print CONTENT as JSON.  Return formatted string or original."
   (if (and content
            (> (length content) 0)
            (memq (aref content 0) '(?\{ ?\[)))
       (condition-case nil
-          (let* ((parsed (json-parse-string content :object-type 'alist :array-type 'array))
-                 (display-data (memoryelaine-show--json-transform-for-display parsed 0 nil))
-                 (json-source (if (equal parsed display-data)
-                                  content
-                                (json-serialize display-data))))
+          (progn
+            (json-parse-string content) ; validate
             (with-temp-buffer
-              (insert json-source)
+              (insert content)
               (json-pretty-print-buffer)
               (buffer-string)))
         (error content))
     content))
-
-(defun memoryelaine-show--json-transform-for-display (value depth key)
-  "Return VALUE transformed for scan-oriented display.
-DEPTH is the current JSON nesting depth.  KEY is the parent object key."
-  (cond
-   ((stringp value)
-    (if (memoryelaine-show--should-ellipsize-string-p value depth key)
-        (memoryelaine-show--ellipsize-string value)
-      value))
-   ((memoryelaine-show--json-object-p value)
-    (mapcar (lambda (cell)
-              (cons (car cell)
-                    (memoryelaine-show--json-transform-for-display
-                     (cdr cell)
-                     (1+ depth)
-                     (memoryelaine-show--json-key-name (car cell)))))
-            value))
-   ((vectorp value)
-    (apply #'vector
-           (mapcar (lambda (item)
-                     (memoryelaine-show--json-transform-for-display item (1+ depth) key))
-                   (append value nil))))
-   ((listp value)
-    (mapcar (lambda (item)
-              (memoryelaine-show--json-transform-for-display item (1+ depth) key))
-            value))
-   (t value)))
-
-(defun memoryelaine-show--json-object-p (value)
-  "Return non-nil when VALUE looks like a parsed JSON object alist."
-  (and (listp value)
-       value
-       (cl-every (lambda (item)
-                   (and (consp item)
-                        (or (symbolp (car item))
-                            (stringp (car item)))))
-                 value)))
-
-(defun memoryelaine-show--json-key-name (key)
-  "Normalize JSON object KEY to a lowercase string."
-  (downcase
-   (cond
-    ((symbolp key) (symbol-name key))
-    ((stringp key) key)
-    (t (format "%s" key)))))
-
-(defun memoryelaine-show--should-ellipsize-string-p (value depth key)
-  "Return non-nil when string VALUE should be ellipsized for display."
-  (let ((limit (symbol-value 'memoryelaine-show-string-ellipsis-limit)))
-    (and (integerp limit)
-         (> limit 0)
-         (> (length value) limit)
-         (or (>= depth 2)
-             (member key memoryelaine-show--truncate-at-any-depth-keys)))))
-
-(defun memoryelaine-show--ellipsize-string (value)
-  "Return VALUE truncated to the configured ellipsis limit."
-  (let ((limit (symbol-value 'memoryelaine-show-string-ellipsis-limit)))
-    (concat (substring value 0 limit) "...")))
 
 (defun memoryelaine-show--compact-json-string (value &optional default-empty-object)
   "Return VALUE as compact JSON.
@@ -356,13 +298,20 @@ Shows preview/full content with size info, or a placeholder."
      (body
       (let ((included (alist-get 'included_bytes body-info))
             (total (alist-get 'total_bytes body-info))
-            (truncated (alist-get 'truncated body-info)))
-        (when (and included total truncated)
+            (truncated (alist-get 'truncated body-info))
+            (ellipsized (alist-get 'ellipsized body-info))
+            (complete (alist-get 'complete body-info)))
+        (cond
+         (truncated
           (insert (propertize
                    (format "  [Preview: %s / %s — press t to load full]\n"
                            (memoryelaine-show--format-bytes included)
                            (memoryelaine-show--format-bytes total))
                    'face 'warning)))
+         ((and ellipsized (not complete))
+          (insert (propertize
+                   "  [Display: long strings shortened — press t for full body]\n"
+                   'face 'warning))))
         (insert (memoryelaine-show--maybe-pretty-print-json body))
         (unless (string-suffix-p "\n" body)
           (insert "\n"))))
@@ -425,6 +374,41 @@ Shows preview/full content with size info, or a placeholder."
       (require 'memoryelaine-thread)
       (memoryelaine-thread-open memoryelaine-state--entry-id)))))
 
+(defun memoryelaine-show--with-full-body (part mode callback)
+  "Ensure the canonical full body for PART and MODE is cached, then call CALLBACK.
+CALLBACK is called with no arguments in the show buffer once the body
+is available.  If the body is already cached as `full', CALLBACK runs
+immediately.  Otherwise a fetch is issued and CALLBACK runs in the
+response handler."
+  (let* ((assembled (and (string= part "resp") (string= mode "assembled")))
+         (body-state (cond
+                      (assembled memoryelaine-state--resp-body-assembled-state)
+                      ((string= part "resp") memoryelaine-state--resp-body-state)
+                      (t memoryelaine-state--req-body-state))))
+    (if (eq body-state 'full)
+        (funcall callback)
+      (let ((entry-id memoryelaine-state--entry-id)
+            (gen memoryelaine-state--detail-generation)
+            (buf (current-buffer)))
+        (message "memoryelaine: fetching full %s body…" part)
+        (memoryelaine-http-get
+         (format "/api/logs/%d/body" entry-id)
+         `(("part" . ,part) ("mode" . ,mode) ("full" . "true"))
+         (lambda (status data err)
+           (when (and (buffer-live-p buf)
+                      (= gen (buffer-local-value 'memoryelaine-state--detail-generation buf))
+                      (= entry-id (buffer-local-value 'memoryelaine-state--entry-id buf)))
+             (with-current-buffer buf
+               (if err
+                   (memoryelaine-log-error "Full body fetch failed (%s): %s" part err)
+                 (when (and (>= status 200) (< status 300))
+                   (let ((content (or (alist-get 'content data) ""))
+                         (available (alist-get 'available data)))
+                     (when available
+                       (memoryelaine-state-detail-set-body part mode content data)
+                       (memoryelaine-show--render)
+                       (funcall callback)))))))))))))
+
 (defun memoryelaine-show-open-request-json-view ()
   "Open the current request body in the JSON inspector."
   (interactive)
@@ -436,9 +420,12 @@ Shows preview/full content with size info, or a placeholder."
    ((null memoryelaine-state--req-body)
     (message "memoryelaine: request body is empty"))
    (t
-    (memoryelaine-json-view-open
-     (format "Log #%d Request JSON" memoryelaine-state--entry-id)
-     memoryelaine-state--req-body))))
+    (memoryelaine-show--with-full-body
+     "req" "raw"
+     (lambda ()
+       (memoryelaine-json-view-open
+        (format "Log #%d Request JSON" memoryelaine-state--entry-id)
+        memoryelaine-state--req-body))))))
 
 (defun memoryelaine-show-open-response-json-view ()
   "Open the current response body in the JSON inspector."
@@ -450,6 +437,7 @@ Shows preview/full content with size info, or a placeholder."
          (body (if assembled
                    memoryelaine-state--resp-body-assembled
                  memoryelaine-state--resp-body))
+         (mode (if assembled "assembled" "raw"))
          (mode-label (if assembled "Assembled Response JSON" "Response JSON")))
     (cond
      ((null memoryelaine-state--metadata)
@@ -459,9 +447,15 @@ Shows preview/full content with size info, or a placeholder."
      ((null body)
       (message "memoryelaine: response body is empty"))
      (t
-      (memoryelaine-json-view-open
-       (format "Log #%d %s" memoryelaine-state--entry-id mode-label)
-       body)))))
+      (memoryelaine-show--with-full-body
+       "resp" mode
+       (lambda ()
+         (let ((full-body (if assembled
+                              memoryelaine-state--resp-body-assembled
+                            memoryelaine-state--resp-body)))
+           (memoryelaine-json-view-open
+            (format "Log #%d %s" memoryelaine-state--entry-id mode-label)
+            full-body))))))))
 
 (defun memoryelaine-show-copy-request-headers ()
   "Copy the request headers as compact raw JSON."
@@ -474,7 +468,8 @@ Shows preview/full content with size info, or a placeholder."
       (alist-get 'req_headers memoryelaine-state--metadata) t))))
 
 (defun memoryelaine-show-copy-request-body ()
-  "Copy the raw request body."
+  "Copy the raw request body.
+Auto-fetches the canonical full body if only a preview is cached."
   (interactive)
   (cond
    ((null memoryelaine-state--metadata)
@@ -482,9 +477,12 @@ Shows preview/full content with size info, or a placeholder."
    ((eq memoryelaine-state--req-body-state 'none)
     (message "memoryelaine: request body not loaded yet"))
    (t
-    (memoryelaine-show--copy-raw
-     "request body"
-     (or memoryelaine-state--req-body "")))))
+    (memoryelaine-show--with-full-body
+     "req" "raw"
+     (lambda ()
+       (memoryelaine-show--copy-raw
+        "request body"
+        (or memoryelaine-state--req-body "")))))))
 
 (defun memoryelaine-show-copy-response-headers ()
   "Copy the response headers as compact raw JSON."
@@ -497,7 +495,8 @@ Shows preview/full content with size info, or a placeholder."
       (alist-get 'resp_headers memoryelaine-state--metadata) t))))
 
 (defun memoryelaine-show-copy-response-body ()
-  "Copy the raw response body for the current response view mode."
+  "Copy the raw response body for the current response view mode.
+Auto-fetches the canonical full body if only a preview is cached."
   (interactive)
   (let* ((assembled (eq memoryelaine-state--resp-view-mode 'assembled))
          (body-state (if assembled
@@ -506,6 +505,7 @@ Shows preview/full content with size info, or a placeholder."
          (body (if assembled
                    memoryelaine-state--resp-body-assembled
                  memoryelaine-state--resp-body))
+         (mode (if assembled "assembled" "raw"))
          (label (if assembled
                     "assembled response body"
                   "response body")))
@@ -515,7 +515,13 @@ Shows preview/full content with size info, or a placeholder."
      ((eq body-state 'none)
       (message "memoryelaine: response body not loaded yet"))
      (t
-      (memoryelaine-show--copy-raw label (or body ""))))))
+      (memoryelaine-show--with-full-body
+       "resp" mode
+       (lambda ()
+         (let ((full-body (if assembled
+                              memoryelaine-state--resp-body-assembled
+                            memoryelaine-state--resp-body)))
+           (memoryelaine-show--copy-raw label (or full-body "")))))))))
 
 (defun memoryelaine-show--jump-section (direction)
   "Jump to the next or previous section according to DIRECTION."
@@ -555,12 +561,12 @@ Shows preview/full content with size info, or a placeholder."
 (defun memoryelaine-show-next-entry ()
   "Open the next entry from the current search results."
   (interactive)
-  (memoryelaine-show--open-neighbor-entry -1))
+  (memoryelaine-show--open-neighbor-entry 1))
 
 (defun memoryelaine-show-previous-entry ()
   "Open the previous entry from the current search results."
   (interactive)
-  (memoryelaine-show--open-neighbor-entry 1))
+  (memoryelaine-show--open-neighbor-entry -1))
 
 ;; --- Formatting helpers ---
 

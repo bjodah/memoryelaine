@@ -1590,3 +1590,242 @@ func TestThreadEndpoint_SSEAssistantResponse_NoRespText(t *testing.T) {
 		t.Errorf("expected assistant content to contain 'Hello world', got %q", threadResp.Messages[1].Content)
 	}
 }
+
+// ---------- Body endpoint: ellipsis and complete field tests ----------
+
+func TestBodyEndpointEllipsisChangedSetsFlags(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 100000 // large enough to not trigger preview truncation
+
+	reqBody := `{"prompt":"` + strings.Repeat("a", 200) + `","model":"gpt-4"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        reqBody,
+		ReqBytes:       int64(len(reqBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Ellipsized {
+		t.Error("expected ellipsized=true")
+	}
+	if body.Complete {
+		t.Error("expected complete=false when ellipsized")
+	}
+	if body.Truncated {
+		t.Error("expected truncated=false when ellipsized")
+	}
+	if !body.Available {
+		t.Error("expected available=true")
+	}
+}
+
+func TestBodyEndpointEllipsisNoChangeFallsBackToPreviewRules(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 50
+
+	// JSON with no long strings — ellipsis changes nothing
+	longBody := `{"key":"` + strings.Repeat("x", 200) + `"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        longBody,
+		ReqBytes:       int64(len(longBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	// "key" is not in DefaultKeys and depth=1 < DefaultMinDepth=2, so ellipsis changes nothing
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Ellipsized {
+		t.Error("expected ellipsized=false — no eligible keys")
+	}
+	if !body.Truncated {
+		t.Error("expected truncated=true — should fall back to preview")
+	}
+	if body.Complete {
+		t.Error("expected complete=false when truncated")
+	}
+	if body.IncludedBytes != 50 {
+		t.Errorf("expected included_bytes=50, got %d", body.IncludedBytes)
+	}
+}
+
+func TestBodyEndpointEllipsisIgnoredForNonJSON(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 100000
+
+	plainBody := "This is not JSON content"
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        plainBody,
+		ReqBytes:       int64(len(plainBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Ellipsized {
+		t.Error("expected ellipsized=false for non-JSON")
+	}
+	if body.Content != plainBody {
+		t.Errorf("expected original content, got %q", body.Content)
+	}
+	if !body.Complete {
+		t.Error("expected complete=true for non-JSON within preview limit")
+	}
+}
+
+func TestBodyEndpointCompleteTrueForCanonicalBody(t *testing.T) {
+	deps := setupTestDeps(t)
+	reqBody := `{"model":"gpt-4"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        reqBody,
+		ReqBytes:       int64(len(reqBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&full=true")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Complete {
+		t.Error("expected complete=true for canonical full body")
+	}
+	if body.Ellipsized {
+		t.Error("expected ellipsized=false")
+	}
+	if body.Truncated {
+		t.Error("expected truncated=false")
+	}
+}
+
+func TestBodyEndpointFullAndEllipsisStillNotComplete(t *testing.T) {
+	deps := setupTestDeps(t)
+
+	reqBody := `{"prompt":"` + strings.Repeat("a", 200) + `"}`
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/chat/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        reqBody,
+		ReqBytes:       int64(len(reqBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	// full=true with ellipsis: ellipsis still modifies content, so not complete
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw&full=true&ellipsis=10")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Ellipsized {
+		t.Error("expected ellipsized=true")
+	}
+	if body.Complete {
+		t.Error("expected complete=false when ellipsized, even with full=true")
+	}
+}
+
+func TestBodyEndpointPreviewTruncationSetsCompleteFalse(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 50
+
+	longBody := strings.Repeat("Z", 200)
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:        1,
+		ClientIP:       "127.0.0.1",
+		RequestMethod:  "POST",
+		RequestPath:    "/v1/completions",
+		UpstreamURL:    "https://example.com",
+		ReqHeadersJSON: "{}",
+		ReqBody:        longBody,
+		ReqBytes:       int64(len(longBody)),
+		RespBody:       ptr(`{}`),
+		RespBytes:      2,
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=req&mode=raw")
+	defer func() { _ = resp.Body.Close() }()
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Truncated {
+		t.Error("expected truncated=true")
+	}
+	if body.Complete {
+		t.Error("expected complete=false when preview-truncated")
+	}
+	if body.Ellipsized {
+		t.Error("expected ellipsized=false")
+	}
+}

@@ -1,7 +1,10 @@
 # Emacs package for memoryelaine 
 In this folder you will find elisp source for an emacs package.
 
-The package requires Emacs 29.1+. For the request JSON inspector buffer,
+The package requires Emacs 29.1+. Older versions are not supported and there
+are no plans to add backward compatibility for Emacs 28 or earlier.
+
+For the request JSON inspector buffer,
 install [`treesit-fold`](https://github.com/emacs-tree-sitter/treesit-fold) and
 ensure the JSON tree-sitter grammar is available.
 

@@ -11,6 +11,7 @@ import (
 
 	"memoryelaine/internal/chat"
 	"memoryelaine/internal/database"
+	"memoryelaine/internal/jsonellipsis"
 	"memoryelaine/internal/streamview"
 )
 
@@ -340,14 +341,14 @@ func (m Model) detailView() string {
 		e.ReqHeadersJSON,
 		"",
 		fmt.Sprintf("─── Request Body (%d bytes%s) ───", e.ReqBytes, truncLabel(e.ReqTruncated)),
-		truncStr(e.ReqBody, 10000),
+		ellipsizeBody(e.ReqBody, 10000),
 		"",
 		"─── Response Headers ───",
 		fmtStrPtr(e.RespHeadersJSON),
 		"",
 		fmt.Sprintf("─── Response Body (%d bytes%s) ───", e.RespBytes, truncLabel(e.RespTruncated)),
 		svStatus,
-		truncStr(respBodyContent, 10000),
+		ellipsizeBody(respBodyContent, 10000),
 	}
 
 	viewH := m.height - 3
@@ -434,6 +435,17 @@ func truncStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "…"
+}
+
+func ellipsizeBody(s string, maxLen int) string {
+	if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
+		if transformed, changed, err := jsonellipsis.Transform(
+			[]byte(s), jsonellipsis.DefaultLimit, jsonellipsis.DefaultKeys, jsonellipsis.DefaultMinDepth,
+		); err == nil && changed {
+			s = string(transformed)
+		}
+	}
+	return truncStr(s, maxLen)
 }
 
 func truncLabel(t bool) string {
