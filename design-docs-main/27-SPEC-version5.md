@@ -403,7 +403,7 @@ Example:
 
 ```yaml
 proxy:
-  listen_addr: "0.0.0.0:8688"
+  listen_addr: "0.0.0.0:8687"
   upstream_base_url: "https://api.openai.com"
   timeout_minutes: 23
   log_paths:

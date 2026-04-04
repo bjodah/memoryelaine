@@ -51,7 +51,7 @@ func Load(cfgPath string) (*Config, error) {
 	v := viper.New()
 
 	// Defaults
-	v.SetDefault("proxy.listen_addr", "0.0.0.0:8688")
+	v.SetDefault("proxy.listen_addr", "0.0.0.0:8687")
 	v.SetDefault("proxy.upstream_base_url", "https://api.openai.com")
 	v.SetDefault("proxy.timeout_minutes", 23)
 	v.SetDefault("proxy.log_paths", []string{"/v1/chat/completions", "/v1/completions"})

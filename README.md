@@ -80,7 +80,7 @@ memoryelaine prune --keep-days 30 --vacuum
 Example config file (`config.yaml`):
 ```yaml
 proxy:
-  listen_addr: "0.0.0.0:8688"
+  listen_addr: "0.0.0.0:8687"
   upstream_base_url: "https://api.openai.com"
   timeout_minutes: 23
   log_paths:
@@ -106,7 +106,7 @@ Lookup order: `--config <path>` → `./config.yaml` → `$HOME/.config/memoryela
 ### Configuration Fields
 
 #### `proxy.listen_addr`
-Address for the proxy listener. Default: `0.0.0.0:8688`
+Address for the proxy listener. Default: `0.0.0.0:8687`
 
 #### `proxy.upstream_base_url`
 Base URL for the single upstream provider. Must be a valid `http://` or `https://` URL. Default: `https://api.openai.com`

@@ -3,7 +3,7 @@ services:
   memoryelaine:
     build: .
     ports:
-      - "8688:8688"
+      - "8687:8687"
       - "8677:8677"
     volumes:
       - ./data:/data
