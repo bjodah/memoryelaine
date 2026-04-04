@@ -47,27 +47,28 @@
             <div class="help-panel">
                 <button id="close-help">✕</button>
                 <h2>Keyboard Shortcuts</h2>
-                <div class="help-section">
+                <div id="help-main-section" class="help-section">
                     <h3>Main View</h3>
                     <div class="help-shortcut-row"><kbd>j</kbd><span>Select next row</span></div>
                     <div class="help-shortcut-row"><kbd>k</kbd><span>Select previous row</span></div>
                     <div class="help-shortcut-row"><kbd>Enter</kbd><span>Open selected row</span></div>
                     <div class="help-shortcut-row"><kbd>/</kbd><span>Focus query input</span></div>
                     <div class="help-shortcut-row"><kbd>R</kbd><span>Toggle recording</span></div>
-                    <div class="help-shortcut-row"><kbd>h</kbd><span>Open this help</span></div>
+                    <div class="help-shortcut-row"><kbd>?</kbd><span>Open this help</span></div>
                 </div>
-                <div class="help-section">
+                <div id="help-detail-section" class="help-section">
                     <h3>Detail View</h3>
                     <div class="help-shortcut-row"><span><kbd>Esc</kbd> / <kbd>u</kbd> / <kbd>q</kbd></span><span>Close detail</span></div>
-                    <div class="help-shortcut-row"><span><kbd>n</kbd> / <kbd>p</kbd></span><span>Scroll down/up</span></div>
+                    <div class="help-shortcut-row"><span><kbd>n</kbd> / <kbd>p</kbd></span><span>Open next/previous filtered entry</span></div>
+                    <div class="help-shortcut-row"><kbd>?</kbd><span>Open this help</span></div>
                     <div class="help-shortcut-row"><kbd>v</kbd><span>Toggle raw and assembled response view</span></div>
                     <div class="help-shortcut-row"><kbd>c</kbd><span>Open conversation view</span></div>
                     <div class="help-shortcut-row"><kbd>t</kbd><span>Load full visible bodies</span></div>
                     <div class="help-shortcut-row"><span><kbd>j</kbd> / <kbd>J</kbd></span><span>Open request/response body inspector</span></div>
                     <div class="help-shortcut-row"><span><kbd>w</kbd> then <kbd>h</kbd> / <kbd>b</kbd> / <kbd>H</kbd> / <kbd>B</kbd></span><span>Copy request headers/body or response headers/body</span></div>
                 </div>
-                <h2>Query DSL</h2>
-                <div class="help-section">
+                <h2 id="help-query-dsl-heading">Query DSL</h2>
+                <div id="help-query-dsl-section" class="help-section">
                     <div class="help-shortcut-row"><code>status:200</code><span>Filter by exact status code</span></div>
                     <div class="help-shortcut-row"><code>status:4xx</code><span>Filter by status family</span></div>
                     <div class="help-shortcut-row"><code>method:POST</code><span>Filter by HTTP method</span></div>
@@ -82,7 +83,7 @@
                 </div>
             </div>
         </div>
-        <div class="keyboard-hint">press <kbd>h</kbd> to show help</div>
+        <div class="keyboard-hint">press <kbd>?</kbd> to show help</div>
     </div>
     <script src="app.js"></script>
 </body>

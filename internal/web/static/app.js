@@ -2,7 +2,8 @@
     const LIMIT = 50;
     const AUTO_LOAD_THRESHOLD = 128 * 1024;
     const ELLIPSIS_LIMIT = 120;
-    const DETAIL_SCROLL_STEP = 56;
+    const HELP_CONTEXT_MAIN = 'main';
+    const HELP_CONTEXT_DETAIL = 'detail';
 
     let offset = 0;
     let autoRefreshTimer = null;
@@ -27,6 +28,12 @@
     const closeDetail = document.getElementById('close-detail');
     const helpOverlay = document.getElementById('help-overlay');
     const closeHelp = document.getElementById('close-help');
+    const helpMainSection = document.getElementById('help-main-section');
+    const helpDetailSection = document.getElementById('help-detail-section');
+    const helpQueryDslHeading = document.getElementById('help-query-dsl-heading');
+    const helpQueryDslSection = document.getElementById('help-query-dsl-section');
+    let helpContext = HELP_CONTEXT_MAIN;
+    let detailNavRequestSeq = 0;
 
     function buildURL() {
         let url = `/api/logs?limit=${LIMIT}&offset=${offset}`;
@@ -160,12 +167,107 @@
         selectLogByIndex(currentIndex + delta);
     }
 
-    function closeHelpOverlay() {
-        helpOverlay.classList.add('hidden');
+    function applyHelpContext() {
+        const isDetail = helpContext === HELP_CONTEXT_DETAIL;
+        if (helpMainSection) {
+            helpMainSection.classList.toggle('hidden', isDetail);
+        }
+        if (helpDetailSection) {
+            helpDetailSection.classList.toggle('hidden', !isDetail);
+        }
+        if (helpQueryDslHeading) {
+            helpQueryDslHeading.classList.toggle('hidden', isDetail);
+        }
+        if (helpQueryDslSection) {
+            helpQueryDslSection.classList.toggle('hidden', isDetail);
+        }
     }
 
-    function showHelpOverlay() {
+    function closeHelpOverlay() {
+        helpOverlay.classList.add('hidden');
+        helpContext = HELP_CONTEXT_MAIN;
+        applyHelpContext();
+    }
+
+    function showHelpOverlay(context = HELP_CONTEXT_MAIN) {
+        helpContext = context;
+        applyHelpContext();
         helpOverlay.classList.remove('hidden');
+    }
+
+    async function navigateDetailByDelta(delta) {
+        if (!Number.isInteger(delta) || delta === 0) {
+            return false;
+        }
+        if (!currentLogs.length) {
+            showDetailStatus('No logs available', 1500);
+            return true;
+        }
+
+        const currentIndex = getSelectedRowIndex();
+        if (currentIndex === -1) {
+            showDetailStatus('Current selection is no longer available', 1800);
+            return true;
+        }
+
+        const targetIndexInPage = currentIndex + delta;
+        if (targetIndexInPage >= 0 && targetIndexInPage < currentLogs.length) {
+            const nextId = currentLogs[targetIndexInPage].id;
+            selectedLogId = nextId;
+            renderSelection();
+            await showDetail(nextId);
+            return true;
+        }
+
+        const direction = delta > 0 ? 1 : -1;
+        const targetOffset = offset + (direction * LIMIT);
+        if (targetOffset < 0) {
+            showDetailStatus('Already at the first filtered result', 1800);
+            return true;
+        }
+
+        const requestSeq = ++detailNavRequestSeq;
+        const query = queryFilter.value.trim();
+        let url = `/api/logs?limit=${LIMIT}&offset=${targetOffset}`;
+        if (query) {
+            url += `&query=${encodeURIComponent(query)}`;
+        }
+
+        try {
+            const resp = await fetch(url);
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}`);
+            }
+            const json = await resp.json();
+            if (requestSeq !== detailNavRequestSeq || !isDetailOpen()) {
+                return true;
+            }
+
+            const nextPageLogs = json.data || [];
+            const total = json.total || 0;
+            if (!nextPageLogs.length) {
+                showDetailStatus(direction > 0 ? 'Already at the last filtered result' : 'Already at the first filtered result', 1800);
+                return true;
+            }
+
+            offset = targetOffset;
+            renderTable(nextPageLogs, total);
+            const targetIndex = direction > 0 ? 0 : nextPageLogs.length - 1;
+            const nextEntry = nextPageLogs[targetIndex];
+            if (!nextEntry) {
+                showDetailStatus(direction > 0 ? 'Already at the last filtered result' : 'Already at the first filtered result', 1800);
+                return true;
+            }
+            selectedLogId = nextEntry.id;
+            renderSelection();
+            await showDetail(nextEntry.id);
+            return true;
+        } catch (e) {
+            if (requestSeq === detailNavRequestSeq && isDetailOpen()) {
+                showDetailStatus(`Navigation failed: ${e.message}`, 2200);
+            }
+            return true;
+        }
     }
 
     function clearDetailStatus() {
@@ -856,10 +958,6 @@
         }
     }
 
-    function scrollDetail(delta) {
-        detailPanel.scrollBy({ top: delta, left: 0, behavior: 'auto' });
-    }
-
     async function loadFullVisibleBodies() {
         const state = detailState;
         if (!state || !state.entry) {
@@ -971,11 +1069,11 @@
                 event.preventDefault();
                 return true;
             case 'n':
-                scrollDetail(DETAIL_SCROLL_STEP);
+                void navigateDetailByDelta(1);
                 event.preventDefault();
                 return true;
             case 'p':
-                scrollDetail(-DETAIL_SCROLL_STEP);
+                void navigateDetailByDelta(-1);
                 event.preventDefault();
                 return true;
             case 'v':
@@ -1026,7 +1124,7 @@
 
     function handleGlobalKeydown(event) {
         if (isHelpOpen()) {
-            if (event.key === 'Escape' || event.key === 'u' || event.key === 'h') {
+            if (event.key === 'Escape' || event.key === 'u' || event.key === '?') {
                 closeHelpOverlay();
                 event.preventDefault();
             }
@@ -1034,6 +1132,11 @@
         }
 
         if (isDetailOpen()) {
+            if (event.key === '?') {
+                showHelpOverlay(HELP_CONTEXT_DETAIL);
+                event.preventDefault();
+                return;
+            }
             handleDetailKeydown(event);
             return;
         }
@@ -1071,8 +1174,8 @@
                     event.preventDefault();
                 }
                 break;
-            case 'h':
-                showHelpOverlay();
+            case '?':
+                showHelpOverlay(HELP_CONTEXT_MAIN);
                 event.preventDefault();
                 break;
         }
