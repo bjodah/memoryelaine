@@ -11,6 +11,11 @@ import (
 )
 
 func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
+	if svResult.ContentBody == "" {
+		svResult.ContentBody = svResult.AssembledBody
+	}
+	svResult.HasContent = svResult.ContentBody != ""
+	svResult.HasReasoning = svResult.ReasoningBody != ""
 	m := Model{
 		mode:   modeDetail,
 		detail: entry,
@@ -205,5 +210,61 @@ func TestEllipsizeBody_NoChanges(t *testing.T) {
 	}
 	if strings.Contains(result, "...") {
 		t.Error("expected no ellipsis for short values")
+	}
+}
+
+func TestSavePrompt_BackspaceRuneAware(t *testing.T) {
+	m := makeTestModel(sampleEntry(), streamview.Result{
+		RawBody:            "data: SSE\n\n",
+		AssembledBody:      "hello",
+		AssembledAvailable: true,
+		Reason:             streamview.ReasonSupported,
+	})
+	m.savePromptActive = true
+	m.savePromptPath = "café"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = updated.(Model)
+
+	if m.savePromptPath != "caf" {
+		t.Errorf("expected rune-aware backspace to yield %q, got %q", "caf", m.savePromptPath)
+	}
+}
+
+func TestIsJSONContent(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{`{"key":"val"}`, true},
+		{`[1,2,3]`, true},
+		{`  {"key":"val"}  `, true},
+		{`plain text`, false},
+		{``, false},
+		{`{broken`, false},
+	}
+	for _, tt := range tests {
+		got := isJSONContent(tt.input)
+		if got != tt.want {
+			t.Errorf("isJSONContent(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestDefaultExportFilename(t *testing.T) {
+	if got := defaultExportFilename(exportReqRaw, `{"model":"gpt-4"}`); got != "request-body.json" {
+		t.Errorf("expected request-body.json, got %s", got)
+	}
+	if got := defaultExportFilename(exportReqRaw, "plain text"); got != "request-body.txt" {
+		t.Errorf("expected request-body.txt, got %s", got)
+	}
+	if got := defaultExportFilename(exportRespRaw, "data: sse\n\n"); got != "response-body-parts.txt" {
+		t.Errorf("expected response-body-parts.txt, got %s", got)
+	}
+	if got := defaultExportFilename(exportAssembledReasoning, "thinking..."); got != "response-reasoning-content.txt" {
+		t.Errorf("expected response-reasoning-content.txt, got %s", got)
+	}
+	if got := defaultExportFilename(exportAssembledContent, "Hello world"); got != "response-body-assembled.txt" {
+		t.Errorf("expected response-body-assembled.txt, got %s", got)
 	}
 }

@@ -40,6 +40,10 @@ type Result struct {
 	AssembledBody      string
 	AssembledAvailable bool
 	Reason             AvailabilityReason
+	ReasoningBody      string
+	ContentBody        string
+	HasReasoning       bool
+	HasContent         bool
 }
 
 var supportedPaths = map[string]bool{
@@ -99,6 +103,10 @@ func Build(entry *database.LogEntry) Result {
 	result.AssembledBody = pr.text
 	result.AssembledAvailable = pr.available
 	result.Reason = pr.reason
+	result.ReasoningBody = pr.reasoning
+	result.ContentBody = pr.content
+	result.HasReasoning = pr.reasoning != ""
+	result.HasContent = pr.content != ""
 
 	return result
 }

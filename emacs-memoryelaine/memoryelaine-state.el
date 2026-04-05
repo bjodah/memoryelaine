@@ -137,6 +137,9 @@ DIRECTION should be 1 for the next entry or -1 for the previous entry."
 (defvar-local memoryelaine-state--resp-body-assembled-info nil
   "Alist with body response metadata for assembled response.")
 
+(defvar-local memoryelaine-state--resp-body-assembled-sections nil
+  "Assembled response sections metadata from the body endpoint.")
+
 (defvar-local memoryelaine-state--detail-loading nil
   "Non-nil when detail data is being fetched.")
 
@@ -158,6 +161,7 @@ DIRECTION should be 1 for the next entry or -1 for the previous entry."
         memoryelaine-state--resp-body-info nil
         memoryelaine-state--resp-body-assembled-state 'none
         memoryelaine-state--resp-body-assembled-info nil
+        memoryelaine-state--resp-body-assembled-sections nil
         memoryelaine-state--detail-loading nil))
 
 (defun memoryelaine-state-detail-set-metadata (metadata stream-view)
@@ -178,6 +182,8 @@ PART is \"req\" or \"resp\".  MODE is \"raw\" or \"assembled\"."
        (if (string= mode "assembled")
            (setq memoryelaine-state--resp-body-assembled content
                  memoryelaine-state--resp-body-assembled-info body-info
+                 memoryelaine-state--resp-body-assembled-sections
+                 (alist-get 'sections body-info)
                  memoryelaine-state--resp-body-assembled-state (if full 'full 'preview))
          (setq memoryelaine-state--resp-body content
                memoryelaine-state--resp-body-info body-info

@@ -2,6 +2,8 @@
 
 memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible inference APIs. It sits transparently between clients and one fixed upstream provider. Its primary purpose is to proxy requests with no intentional buffering of active streams while asynchronously logging selected request/response pairs, timings, and HTTP metadata to a local SQLite database.
 
+> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
+
 ## Quick Start
 
 ```bash
@@ -60,10 +62,12 @@ Open the interactive terminal UI for browsing logs.
 - `j`/`k` or arrows: Navigate the table or scroll the detail view
 - `enter`: Open detail view for the selected row
 - `esc` or `q`: Leave detail view
-- `v`: Toggle stream view mode (Raw / Assembled)
+- `v`: Toggle stream view mode (Raw / Assembled). Assembled is the default when available.
+- `z`: Toggle reasoning section fold state in assembled mode
 - `r`: Refresh current page
 - `n` / `p`: Next / previous page
 - `f`: Cycle exact status filters (none → 200 → 400 → 500)
+- `x` then `b`/`B`/`c`/`R`: Export request raw, response raw, assembled content, or assembled reasoning (TUI prompts for a save path)
 - `q` / `ctrl+c`: Quit
 
 ### `prune`
@@ -147,7 +151,7 @@ Structured log verbosity for the service process. Accepted values: `debug`, `inf
 - `GET /` - Embedded Web UI (Basic Auth protected)
 - `GET /api/logs` - Log summaries (no bodies/headers). Supports `query`, `limit`, `offset` parameters. (Basic Auth protected)
 - `GET /api/logs/{id}` - Log detail metadata with decoded headers and stream-view availability. No bodies. (Basic Auth protected)
-- `GET /api/logs/{id}/body` - Request or response body content. Params: `part` (req|resp, default: resp), `mode` (raw|assembled, default: raw), `full` (true|false, default: false). (Basic Auth protected)
+- `GET /api/logs/{id}/body` - Request or response body content. Params: `part` (req|resp, default: resp), `mode` (raw|assembled, default: raw), `section` (all|content|reasoning; assembled response only), `full` (true|false, default: false). (Basic Auth protected)
 - `GET /api/recording` - Current runtime recording state (Basic Auth protected)
 - `PUT /api/recording` - Change runtime recording state with `{"recording":true|false}` (Basic Auth protected)
 - `GET /last-request` - Latest captured request body (Basic Auth protected)
@@ -184,10 +188,10 @@ When one or more loggable requests have been proxied while recording is paused, 
 
 ## Stream View Mode
 
-When viewing a streamed response in the detail view, the TUI and Web UI offer a **Stream View** toggle:
+When viewing a streamed response in the detail view, the TUI, Web UI, and Emacs client offer a **Stream View** toggle:
 
 - **Raw**: the exact stored response body, including SSE framing
-- **Assembled**: reconstructed assistant text derived from the SSE stream
+- **Assembled**: reconstructed content derived from the SSE stream, with separate content and reasoning sections when available
 
 Assembled mode is currently supported for:
 - `/v1/chat/completions`

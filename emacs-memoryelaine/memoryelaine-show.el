@@ -31,6 +31,15 @@
     map)
   "Prefix keymap for raw copy commands in `memoryelaine-show-mode'.")
 
+(defvar memoryelaine-show-export-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "b") #'memoryelaine-show-save-request-raw-body)
+    (define-key map (kbd "B") #'memoryelaine-show-save-response-raw-body)
+    (define-key map (kbd "c") #'memoryelaine-show-save-response-assembled-content)
+    (define-key map (kbd "R") #'memoryelaine-show-save-response-assembled-reasoning)
+    map)
+  "Prefix keymap for body export commands in `memoryelaine-show-mode'.")
+
 (defvar memoryelaine-show-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") #'quit-window)
@@ -47,6 +56,7 @@
     (define-key map (kbd "C-M-n") #'memoryelaine-show-next-entry)
     (define-key map (kbd "C-M-p") #'memoryelaine-show-previous-entry)
     (define-key map (kbd "w") memoryelaine-show-copy-map)
+    (define-key map (kbd "x") memoryelaine-show-export-map)
     map)
   "Keymap for `memoryelaine-show-mode'.")
 
@@ -91,22 +101,30 @@ Fetches metadata and preview bodies."
                  (let ((entry (alist-get 'entry data))
                        (sv (alist-get 'stream_view data)))
                    (memoryelaine-state-detail-set-metadata entry sv)
+                   (when (and (memoryelaine-show--json-true-p (alist-get 'assembled_available sv))
+                              (equal (alist-get 'default_mode sv) "assembled"))
+                     (setq memoryelaine-state--resp-view-mode 'assembled))
                    (memoryelaine-show--render)
                    ;; Fetch preview bodies
                    (when (alist-get 'has_request_body entry)
                      (memoryelaine-show--fetch-body entry-id "req" "raw" nil))
                    (when (alist-get 'has_response_body entry)
-                     (memoryelaine-show--fetch-body entry-id "resp" "raw" nil)))
+                     (memoryelaine-show--fetch-body entry-id "resp" "raw" nil)
+                     (when (memoryelaine-show--json-true-p (alist-get 'assembled_available sv))
+                       (memoryelaine-show--fetch-body entry-id "resp" "assembled" nil "all"))))
                (memoryelaine-log-error "Detail error: HTTP %d" status)))))))))
 
-(defun memoryelaine-show--fetch-body (entry-id part mode full)
+(defun memoryelaine-show--fetch-body (entry-id part mode full &optional section)
   "Fetch body for ENTRY-ID.
 PART is \"req\" or \"resp\".  MODE is \"raw\" or \"assembled\".
-FULL is non-nil to fetch the complete body."
+FULL is non-nil to fetch the complete body.
+Optional SECTION selects assembled sub-content: \"all\", \"content\", or \"reasoning\"."
   (let ((buf (get-buffer memoryelaine-show-buffer-name))
         (gen memoryelaine-state--detail-generation)
         (params `(("part" . ,part)
                   ("mode" . ,mode))))
+    (when (and section (string= mode "assembled") (string= part "resp"))
+      (push (cons "section" section) params))
     (when full
       (push '("full" . "true") params))
     ;; Pass ellipsis on preview/display fetches (not canonical full).
@@ -205,10 +223,13 @@ FULL is non-nil to fetch the complete body."
       ;; Stream view status
       (when sv
         (let ((assembled (alist-get 'assembled_available sv))
-              (reason (alist-get 'reason sv)))
+              (reason (alist-get 'reason sv))
+              (has-content (alist-get 'has_content sv)))
           (cond
            ((and assembled (eq memoryelaine-state--resp-view-mode 'assembled))
-            (insert "[Stream View: Assembled] "))
+            (if (memoryelaine-show--json-true-p has-content)
+                (insert "[Stream View: Assembled] ")
+              (insert "[Stream View: Assembled (content missing)] ")))
            (assembled
             (insert "[Stream View: Raw — press v for assembled] "))
            ((and reason (not (string= reason "unsupported_path"))
@@ -221,7 +242,7 @@ FULL is non-nil to fetch the complete body."
       ;; Help line
       (insert "\n")
       (insert (propertize
-               "q:back  g:refresh  v:toggle view  t:load full bodies  c:conversation  j/J:req/resp json  n/p:line  M-n/M-p:section  C-M-n/C-M-p:entry  w h/b/H/B:copy raw"
+               "q:back  g:refresh  v:toggle view  t:load full bodies  c:conversation  j/J:req/resp json  n/p:line  M-n/M-p:section  C-M-n/C-M-p:entry  w h/b/H/B:copy raw  x b/B/c/R:download"
                'face 'shadow)))
     (setq memoryelaine-show--section-positions
           (nreverse memoryelaine-show--section-positions))
@@ -300,11 +321,13 @@ Shows preview/full content with size info, or a placeholder."
      ((eq body-state 'none)
       (insert "  [Not loaded]\n"))
      (body
-      (let ((included (alist-get 'included_bytes body-info))
+     (let ((included (alist-get 'included_bytes body-info))
             (total (alist-get 'total_bytes body-info))
             (truncated (alist-get 'truncated body-info))
             (ellipsized (alist-get 'ellipsized body-info))
-            (complete (alist-get 'complete body-info)))
+            (complete (alist-get 'complete body-info))
+            (sections (and is-resp (eq view-mode 'assembled)
+                           memoryelaine-state--resp-body-assembled-sections)))
         (cond
          ((memoryelaine-show--json-true-p truncated)
           (insert (propertize
@@ -317,9 +340,23 @@ Shows preview/full content with size info, or a placeholder."
           (insert (propertize
                    "  [Display: long strings shortened — press t for full body]\n"
                    'face 'warning))))
-        (insert (memoryelaine-show--maybe-pretty-print-json body))
-        (unless (string-suffix-p "\n" body)
-          (insert "\n"))))
+        (if (and (listp sections) sections)
+            (progn
+              (dolist (section sections)
+                (let* ((kind (or (alist-get 'kind section) "section"))
+                       (label (or (alist-get 'label section) kind))
+                       (content (or (alist-get 'content section) "")))
+                  (insert (format "  [%s]\n" label))
+                  (if (and (string= kind "content")
+                           (string= content ""))
+                      (insert (propertize "  (content missing)\n" 'face 'italic))
+                    (let ((pretty (memoryelaine-show--maybe-pretty-print-json content)))
+                      (insert pretty)
+                      (unless (string-suffix-p "\n" pretty)
+                        (insert "\n")))))))
+          (insert (memoryelaine-show--maybe-pretty-print-json body))
+          (unless (string-suffix-p "\n" body)
+            (insert "\n")))))
      (t
       (insert "  (empty)\n")))))
 
@@ -345,7 +382,7 @@ Shows preview/full content with size info, or a placeholder."
             ;; Fetch assembled if not cached
             (unless memoryelaine-state--resp-body-assembled
               (memoryelaine-show--fetch-body memoryelaine-state--entry-id
-                                             "resp" "assembled" nil)))
+                                             "resp" "assembled" nil "all")))
         (setq memoryelaine-state--resp-view-mode 'raw))
       (memoryelaine-show--render))))
 
@@ -361,7 +398,7 @@ Shows preview/full content with size info, or a placeholder."
         ;; Also fetch full assembled body if available
         (when (and memoryelaine-state--stream-view
                    (alist-get 'assembled_available memoryelaine-state--stream-view))
-          (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "assembled" t))))))
+          (memoryelaine-show--fetch-body memoryelaine-state--entry-id "resp" "assembled" t "all"))))))
 
 (defun memoryelaine-show-open-conversation ()
   "Open the conversation/thread view for the current chat entry."
@@ -379,7 +416,7 @@ Shows preview/full content with size info, or a placeholder."
       (require 'memoryelaine-thread)
       (memoryelaine-thread-open memoryelaine-state--entry-id)))))
 
-(defun memoryelaine-show--with-full-body (part mode callback)
+(defun memoryelaine-show--with-full-body (part mode callback &optional section)
   "Ensure the canonical full body for PART and MODE is cached, then call CALLBACK.
 CALLBACK is called with no arguments in the show buffer once the body
 is available.  If the body is already cached as `full', CALLBACK runs
@@ -398,7 +435,9 @@ response handler."
         (message "memoryelaine: fetching full %s body…" part)
         (memoryelaine-http-get
          (format "/api/logs/%d/body" entry-id)
-         `(("part" . ,part) ("mode" . ,mode) ("full" . "true"))
+         (append `(("part" . ,part) ("mode" . ,mode) ("full" . "true"))
+                 (when (and assembled section)
+                   `(("section" . ,section))))
          (lambda (status data err)
            (when (and (buffer-live-p buf)
                       (= gen (buffer-local-value 'memoryelaine-state--detail-generation buf))
@@ -527,6 +566,115 @@ Auto-fetches the canonical full body if only a preview is cached."
                               memoryelaine-state--resp-body-assembled
                             memoryelaine-state--resp-body)))
            (memoryelaine-show--copy-raw label (or full-body "")))))))))
+
+(defun memoryelaine-show--body-is-json-p (content)
+  "Return non-nil when CONTENT parses as JSON."
+  (and content
+       (> (length content) 0)
+       (condition-case nil
+           (progn
+             (json-parse-string content)
+             t)
+         (error nil))))
+
+(defun memoryelaine-show--default-export-filename (part mode section content)
+  "Compute a default export filename for PART, MODE, SECTION, and CONTENT."
+  (let ((ext (if (memoryelaine-show--body-is-json-p content) "json" "txt")))
+    (cond
+     ((string= part "req") (format "request-body.%s" ext))
+     ((string= mode "raw") (format "response-body-parts.%s" ext))
+     ((string= section "reasoning") (format "response-reasoning-content.%s" ext))
+     (t (format "response-body-assembled.%s" ext)))))
+
+(defun memoryelaine-show--write-export-file (content default-filename label)
+  "Prompt for a save path and write CONTENT using DEFAULT-FILENAME and LABEL."
+  (let ((path (read-file-name
+               (format "Save %s to: " label)
+               default-directory
+               default-filename)))
+    (with-temp-buffer
+      (insert (or content ""))
+      (write-region (point-min) (point-max) path nil 'silent))
+    (message "memoryelaine: saved %s to %s" label path)))
+
+(defun memoryelaine-show--fetch-full-body-content (part mode section callback)
+  "Fetch canonical full body for PART and MODE, then call CALLBACK with content.
+SECTION may be nil, \"all\", \"content\", or \"reasoning\"."
+  (let ((entry-id memoryelaine-state--entry-id)
+        (gen memoryelaine-state--detail-generation)
+        (buf (current-buffer))
+        (params (append `(("part" . ,part) ("mode" . ,mode) ("full" . "true"))
+                        (when section `(("section" . ,section))))))
+    (memoryelaine-http-get
+     (format "/api/logs/%d/body" entry-id)
+     params
+     (lambda (status data err)
+       (when (and (buffer-live-p buf)
+                  (= gen (buffer-local-value 'memoryelaine-state--detail-generation buf))
+                  (= entry-id (buffer-local-value 'memoryelaine-state--entry-id buf)))
+         (with-current-buffer buf
+           (cond
+            (err
+             (memoryelaine-log-error "Export fetch failed (%s/%s): %s" part mode err))
+            ((or (< status 200) (>= status 300))
+             (memoryelaine-log-error "Export fetch error: HTTP %d" status))
+            ((not (memoryelaine-show--json-true-p (alist-get 'available data)))
+             (message "memoryelaine: body unavailable (%s)"
+                      (or (alist-get 'reason data) "not available")))
+            (t
+             (funcall callback (or (alist-get 'content data) ""))))))))))
+
+(defun memoryelaine-show-save-request-raw-body ()
+  "Save canonical full request body to a file."
+  (interactive)
+  (if (null memoryelaine-state--metadata)
+      (message "memoryelaine: no entry loaded")
+    (memoryelaine-show--fetch-full-body-content
+     "req" "raw" nil
+     (lambda (content)
+       (memoryelaine-show--write-export-file
+        content
+        (memoryelaine-show--default-export-filename "req" "raw" "all" content)
+        "request body")))))
+
+(defun memoryelaine-show-save-response-raw-body ()
+  "Save canonical full raw response body to a file."
+  (interactive)
+  (if (null memoryelaine-state--metadata)
+      (message "memoryelaine: no entry loaded")
+    (memoryelaine-show--fetch-full-body-content
+     "resp" "raw" nil
+     (lambda (content)
+       (memoryelaine-show--write-export-file
+        content
+        (memoryelaine-show--default-export-filename "resp" "raw" "all" content)
+        "raw response body")))))
+
+(defun memoryelaine-show-save-response-assembled-content ()
+  "Save canonical full assembled content section to a file."
+  (interactive)
+  (if (null memoryelaine-state--metadata)
+      (message "memoryelaine: no entry loaded")
+    (memoryelaine-show--fetch-full-body-content
+     "resp" "assembled" "content"
+     (lambda (content)
+       (memoryelaine-show--write-export-file
+        content
+        (memoryelaine-show--default-export-filename "resp" "assembled" "content" content)
+        "assembled response content")))))
+
+(defun memoryelaine-show-save-response-assembled-reasoning ()
+  "Save canonical full assembled reasoning section to a file."
+  (interactive)
+  (if (null memoryelaine-state--metadata)
+      (message "memoryelaine: no entry loaded")
+    (memoryelaine-show--fetch-full-body-content
+     "resp" "assembled" "reasoning"
+     (lambda (content)
+       (memoryelaine-show--write-export-file
+        content
+        (memoryelaine-show--default-export-filename "resp" "assembled" "reasoning" content)
+        "assembled response reasoning")))))
 
 (defun memoryelaine-show--jump-section (direction)
   "Jump to the next or previous section according to DIRECTION."

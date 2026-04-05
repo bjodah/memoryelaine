@@ -199,6 +199,49 @@ func TestChatCompletions_TextlessStream(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_ReasoningOnlyStream(t *testing.T) {
+	body := makeSSEBody(
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"#"}}]}`,
+		"[DONE]",
+	)
+	r := parseChatCompletionsSSE(body)
+	if !r.available {
+		t.Errorf("expected available, reason=%q", r.reason)
+	}
+	if r.reasoning != "#" {
+		t.Errorf("expected reasoning %q, got %q", "#", r.reasoning)
+	}
+	if r.content != "" {
+		t.Errorf("expected empty content, got %q", r.content)
+	}
+	if r.text != "" {
+		t.Errorf("expected empty flattened text, got %q", r.text)
+	}
+}
+
+func TestChatCompletions_ReasoningAndContentInterleaved(t *testing.T) {
+	body := makeSSEBody(
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"A"}}]}`,
+		`{"choices":[{"index":0,"delta":{"content":"B"}}]}`,
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"C"}}]}`,
+		`{"choices":[{"index":0,"delta":{"content":"D"}}]}`,
+		"[DONE]",
+	)
+	r := parseChatCompletionsSSE(body)
+	if !r.available {
+		t.Errorf("expected available, reason=%q", r.reason)
+	}
+	if r.reasoning != "AC" {
+		t.Errorf("expected reasoning %q, got %q", "AC", r.reasoning)
+	}
+	if r.content != "BD" {
+		t.Errorf("expected content %q, got %q", "BD", r.content)
+	}
+	if r.text != "BD" {
+		t.Errorf("expected flattened text %q, got %q", "BD", r.text)
+	}
+}
+
 func TestChatCompletions_EmptySSEPaylines(t *testing.T) {
 	// Body with comment lines and empty blocks
 	body := ": keep-alive\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
