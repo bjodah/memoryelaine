@@ -21,6 +21,7 @@ Once the proxy is running:
 - Send client traffic to `proxy.listen_addr`
 - Browse the management UI on `management.listen_addr`
 - Inspect logs with `memoryelaine log` or `memoryelaine tui`
+- ...or from Emacs via [./emacs-memoryelaine/](./emacs-memoryelaine/)
 
 ## Core Commands
 
@@ -198,10 +199,6 @@ Assembled mode is currently supported for:
 - `/v1/completions`
 
 Assembled mode is unavailable for truncated, non-streamed, or unsupported responses. When parsing only partially succeeds, the recovered text is shown with a warning indicator.
-
-## Emacs client
-
-See [./emacs-memoryelaine/README.md](./emacs-memoryelaine/README.md).
 
 ## Development
 
