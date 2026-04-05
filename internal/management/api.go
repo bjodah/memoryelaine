@@ -296,7 +296,9 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 		if !sv.AssembledAvailable {
 			resp.Reason = string(sv.Reason)
 		} else {
-			resp.Sections = assembledSectionsFromResult(sv)
+			if full {
+				resp.Sections = assembledSectionsFromResult(sv)
+			}
 			sourceBody = selectAssembledSectionBody(sv, section)
 			available = true
 			resp.TotalBytes = int64(len(sourceBody))

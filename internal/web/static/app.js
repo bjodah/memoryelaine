@@ -584,7 +584,9 @@
     }
 
     function triggerDownload(content, filename) {
-        const blob = new Blob([content || ''], { type: 'text/plain;charset=utf-8' });
+        const isJSON = filename.endsWith('.json');
+        const mimeType = isJSON ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+        const blob = new Blob([content || ''], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -611,7 +613,8 @@
             }
             const content = bodyData.content || '';
             triggerDownload(content, defaultExportFilename(part, mode, section, content));
-            showDetailStatus(`Downloaded ${bodyButtonLabel(part, mode)}`, 1500);
+            const sectionLabel = section !== 'all' ? ` (${section})` : '';
+            showDetailStatus(`Downloaded ${bodyButtonLabel(part, mode)}${sectionLabel}`, 1500);
         });
     }
 

@@ -188,7 +188,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyBackspace:
 				if len(m.savePromptPath) > 0 {
-					m.savePromptPath = m.savePromptPath[:len(m.savePromptPath)-1]
+					runes := []rune(m.savePromptPath)
+					m.savePromptPath = string(runes[:len(runes)-1])
 				}
 				return m, nil
 			case tea.KeyRunes:
@@ -489,13 +490,13 @@ func (m Model) assembledDisplayBody() string {
 			b.WriteString("[Reasoning]\n  (folded, press z to expand)\n\n")
 		} else {
 			b.WriteString("[Reasoning]\n")
-			b.WriteString(ellipsizeBody(sv.ReasoningBody, 10000))
+			b.WriteString(sv.ReasoningBody)
 			b.WriteString("\n\n")
 		}
 	}
 	b.WriteString("[Content]\n")
 	if sv.HasContent {
-		b.WriteString(ellipsizeBody(sv.ContentBody, 10000))
+		b.WriteString(sv.ContentBody)
 	} else {
 		b.WriteString("(content missing)")
 	}

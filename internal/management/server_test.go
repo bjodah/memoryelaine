@@ -857,6 +857,45 @@ func TestBodyEndpoint_AssembledResponse(t *testing.T) {
 	if body.Section != "all" {
 		t.Errorf("expected section=all, got %s", body.Section)
 	}
+	// Preview request: sections omitted to keep response small.
+	if len(body.Sections) != 0 {
+		t.Fatalf("expected no sections on preview request, got %d", len(body.Sections))
+	}
+}
+
+func TestBodyEndpoint_AssembledResponseFullIncludesSections(t *testing.T) {
+	deps := setupTestDeps(t)
+	sseBody := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\ndata: [DONE]\n\n"
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:         1,
+		ClientIP:        "127.0.0.1",
+		RequestMethod:   "POST",
+		RequestPath:     "/v1/chat/completions",
+		UpstreamURL:     "https://example.com/v1/chat/completions",
+		ReqHeadersJSON:  "{}",
+		ReqBody:         `{"model":"gpt-4"}`,
+		ReqBytes:        17,
+		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
+		RespBody:        ptr(sseBody),
+		RespBytes:       int64(len(sseBody)),
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled&full=true")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Available {
+		t.Fatalf("expected available=true, reason=%s", body.Reason)
+	}
 	if len(body.Sections) != 1 {
 		t.Fatalf("expected one section, got %d", len(body.Sections))
 	}
@@ -885,7 +924,7 @@ func TestBodyEndpoint_AssembledResponseReasoningSection(t *testing.T) {
 	srv := httptest.NewServer(NewMux(deps))
 	defer srv.Close()
 
-	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled")
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled&full=true")
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
