@@ -11,6 +11,11 @@ import (
 )
 
 func makeTestModel(entry *database.LogEntry, svResult streamview.Result) Model {
+	if svResult.ContentBody == "" {
+		svResult.ContentBody = svResult.AssembledBody
+	}
+	svResult.HasContent = svResult.ContentBody != ""
+	svResult.HasReasoning = svResult.ReasoningBody != ""
 	m := Model{
 		mode:   modeDetail,
 		detail: entry,

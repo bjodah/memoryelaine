@@ -64,21 +64,33 @@ type LogDetailEntry struct {
 type StreamViewResponse struct {
 	AssembledAvailable bool   `json:"assembled_available"`
 	Reason             string `json:"reason"`
+	DefaultMode        string `json:"default_mode"`
+	HasReasoning       bool   `json:"has_reasoning"`
+	HasContent         bool   `json:"has_content"`
+}
+
+type BodySection struct {
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Content string `json:"content"`
+	Folded  bool   `json:"folded"`
 }
 
 // BodyResponse is the envelope for body retrieval results.
 type BodyResponse struct {
-	Part          string `json:"part"`
-	Mode          string `json:"mode"`
-	Full          bool   `json:"full"`
-	Content       string `json:"content"`
-	IncludedBytes int    `json:"included_bytes"`
-	TotalBytes    int64  `json:"total_bytes"`
-	Truncated     bool   `json:"truncated"`
-	Ellipsized    bool   `json:"ellipsized,omitempty"`
-	Complete      bool   `json:"complete"`
-	Available     bool   `json:"available"`
-	Reason        string `json:"reason,omitempty"`
+	Part          string        `json:"part"`
+	Mode          string        `json:"mode"`
+	Section       string        `json:"section,omitempty"`
+	Full          bool          `json:"full"`
+	Content       string        `json:"content"`
+	Sections      []BodySection `json:"sections,omitempty"`
+	IncludedBytes int           `json:"included_bytes"`
+	TotalBytes    int64         `json:"total_bytes"`
+	Truncated     bool          `json:"truncated"`
+	Ellipsized    bool          `json:"ellipsized,omitempty"`
+	Complete      bool          `json:"complete"`
+	Available     bool          `json:"available"`
+	Reason        string        `json:"reason,omitempty"`
 }
 
 // APIError is a structured error response.

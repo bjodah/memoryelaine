@@ -8,6 +8,8 @@ import (
 // parseResult is the internal result of endpoint-specific SSE parsing.
 type parseResult struct {
 	text      string
+	content   string
+	reasoning string
 	available bool
 	reason    AvailabilityReason
 }
@@ -53,14 +55,16 @@ type chatCompletionChoice struct {
 }
 
 type chatCompletionDelta struct {
-	Content      *string         `json:"content"`
-	ToolCalls    json.RawMessage `json:"tool_calls,omitempty"`
-	FunctionCall json.RawMessage `json:"function_call,omitempty"`
+	Content          *string         `json:"content"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+	FunctionCall     json.RawMessage `json:"function_call,omitempty"`
 }
 
 func parseChatCompletionsSSE(body string) parseResult {
 	events := splitSSEEvents(body)
-	var assembled strings.Builder
+	var content strings.Builder
+	var reasoning strings.Builder
 
 	for _, data := range events {
 		if data == "[DONE]" {
@@ -69,8 +73,14 @@ func parseChatCompletionsSSE(body string) parseResult {
 
 		var chunk chatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			if assembled.Len() > 0 {
-				return parseResult{text: assembled.String(), available: true, reason: ReasonPartialParse}
+			if content.Len() > 0 || reasoning.Len() > 0 {
+				return parseResult{
+					text:      content.String(),
+					content:   content.String(),
+					reasoning: reasoning.String(),
+					available: true,
+					reason:    ReasonPartialParse,
+				}
 			}
 			return parseResult{reason: ReasonParseFailed}
 		}
@@ -93,15 +103,24 @@ func parseChatCompletionsSSE(body string) parseResult {
 		}
 
 		if delta.Content != nil {
-			assembled.WriteString(*delta.Content)
+			content.WriteString(*delta.Content)
+		}
+		if delta.ReasoningContent != nil {
+			reasoning.WriteString(*delta.ReasoningContent)
 		}
 	}
 
-	if assembled.Len() == 0 {
+	if content.Len() == 0 && reasoning.Len() == 0 {
 		return parseResult{reason: ReasonNoTextContent}
 	}
 
-	return parseResult{text: assembled.String(), available: true, reason: ReasonSupported}
+	return parseResult{
+		text:      content.String(),
+		content:   content.String(),
+		reasoning: reasoning.String(),
+		available: true,
+		reason:    ReasonSupported,
+	}
 }
 
 // --- /v1/completions ---
@@ -126,7 +145,12 @@ func parseCompletionsSSE(body string) parseResult {
 		var chunk completionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			if assembled.Len() > 0 {
-				return parseResult{text: assembled.String(), available: true, reason: ReasonPartialParse}
+				return parseResult{
+					text:      assembled.String(),
+					content:   assembled.String(),
+					available: true,
+					reason:    ReasonPartialParse,
+				}
 			}
 			return parseResult{reason: ReasonParseFailed}
 		}
@@ -148,7 +172,12 @@ func parseCompletionsSSE(body string) parseResult {
 		return parseResult{reason: ReasonNoTextContent}
 	}
 
-	return parseResult{text: assembled.String(), available: true, reason: ReasonSupported}
+	return parseResult{
+		text:      assembled.String(),
+		content:   assembled.String(),
+		available: true,
+		reason:    ReasonSupported,
+	}
 }
 
 // isNonEmptyJSONValue returns true if the raw JSON message is present and

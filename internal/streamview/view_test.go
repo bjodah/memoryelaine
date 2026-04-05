@@ -163,6 +163,12 @@ func TestBuild_ChatCompletionsDelegates(t *testing.T) {
 	if r.Reason != ReasonSupported {
 		t.Errorf("expected reason %q, got %q", ReasonSupported, r.Reason)
 	}
+	if !r.HasContent {
+		t.Error("expected content flag to be true")
+	}
+	if r.HasReasoning {
+		t.Error("expected reasoning flag to be false")
+	}
 }
 
 func TestBuild_CompletionsDelegates(t *testing.T) {
@@ -181,6 +187,36 @@ func TestBuild_CompletionsDelegates(t *testing.T) {
 	}
 	if r.AssembledBody != "Hello world" {
 		t.Errorf("expected %q, got %q", "Hello world", r.AssembledBody)
+	}
+	if !r.HasContent {
+		t.Error("expected content flag to be true")
+	}
+}
+
+func TestBuild_ReasoningOnlyStillAvailable(t *testing.T) {
+	body := makeSSEBody(
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"#"}}]}`,
+		"[DONE]",
+	)
+	entry := &database.LogEntry{
+		RequestPath: "/v1/chat/completions",
+		RespBody:    &body,
+	}
+	r := Build(entry)
+	if !r.AssembledAvailable {
+		t.Errorf("expected assembled available, reason=%q", r.Reason)
+	}
+	if !r.HasReasoning {
+		t.Error("expected reasoning flag to be true")
+	}
+	if r.HasContent {
+		t.Error("expected content flag to be false")
+	}
+	if r.ReasoningBody != "#" {
+		t.Errorf("expected reasoning body %q, got %q", "#", r.ReasoningBody)
+	}
+	if r.AssembledBody != "" {
+		t.Errorf("expected empty flattened assembled body, got %q", r.AssembledBody)
 	}
 }
 

@@ -186,6 +186,9 @@ func handleDetail(w http.ResponseWriter, r *http.Request, reader *database.LogRe
 		StreamView: StreamViewResponse{
 			AssembledAvailable: sv.AssembledAvailable,
 			Reason:             string(sv.Reason),
+			DefaultMode:        defaultStreamViewMode(sv),
+			HasReasoning:       sv.HasReasoning,
+			HasContent:         sv.HasContent,
 		},
 	}
 
@@ -232,6 +235,19 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 	fullParam := r.URL.Query().Get("full")
 	full := fullParam == "true" || fullParam == "1"
 
+	section := r.URL.Query().Get("section")
+	if section == "" {
+		section = "all"
+	}
+	if mode != "assembled" && section != "all" {
+		writeAPIError(w, http.StatusBadRequest, "invalid_section", "section is only valid for assembled response bodies")
+		return
+	}
+	if mode == "assembled" && (part != "resp" || (section != "all" && section != "content" && section != "reasoning")) {
+		writeAPIError(w, http.StatusBadRequest, "invalid_section", "section must be one of 'all', 'content', or 'reasoning' for assembled response bodies")
+		return
+	}
+
 	ellipsisLimit := 0
 	if v := r.URL.Query().Get("ellipsis"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -249,6 +265,9 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 	resp.Part = part
 	resp.Mode = mode
 	resp.Full = full
+	if mode == "assembled" {
+		resp.Section = section
+	}
 
 	// Resolve the canonical source body.
 	var sourceBody string
@@ -273,14 +292,14 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 		}
 
 	case part == "resp" && mode == "assembled":
-		resp.TotalBytes = entry.RespBytes
 		sv := streamview.Build(entry)
 		if !sv.AssembledAvailable {
 			resp.Reason = string(sv.Reason)
 		} else {
-			sourceBody = sv.AssembledBody
+			resp.Sections = assembledSectionsFromResult(sv)
+			sourceBody = selectAssembledSectionBody(sv, section)
 			available = true
-			resp.TotalBytes = int64(len(sv.AssembledBody))
+			resp.TotalBytes = int64(len(sourceBody))
 		}
 	}
 
@@ -420,6 +439,43 @@ func decodeHeaders(raw string) map[string][]string {
 		return nil
 	}
 	return h
+}
+
+func defaultStreamViewMode(sv streamview.Result) string {
+	if sv.AssembledAvailable {
+		return string(streamview.ModeAssembled)
+	}
+	return string(streamview.ModeRaw)
+}
+
+func assembledSectionsFromResult(sv streamview.Result) []BodySection {
+	sections := make([]BodySection, 0, 2)
+	if sv.HasReasoning {
+		sections = append(sections, BodySection{
+			Kind:    "reasoning",
+			Label:   "Reasoning",
+			Content: sv.ReasoningBody,
+			Folded:  true,
+		})
+	}
+	sections = append(sections, BodySection{
+		Kind:    "content",
+		Label:   "Content",
+		Content: sv.ContentBody,
+		Folded:  false,
+	})
+	return sections
+}
+
+func selectAssembledSectionBody(sv streamview.Result, section string) string {
+	switch section {
+	case "reasoning":
+		return sv.ReasoningBody
+	case "content", "all":
+		return sv.ContentBody
+	default:
+		return sv.ContentBody
+	}
 }
 
 func derefStr(s *string) string {

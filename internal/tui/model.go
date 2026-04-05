@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,26 +26,32 @@ const (
 )
 
 type Model struct {
-	mode           viewMode
-	reader         *database.LogReader
-	filter         database.QueryFilter
-	entries        []database.LogSummary
-	total          int64
-	cursor         int
-	detail         *database.LogEntry
-	streamView     streamViewState
-	detailReqBody  string // precomputed ellipsized request body
-	detailRespBody string // precomputed ellipsized response body
-	scroll         int
-	thread         []threadMessage
-	threadScroll   int
-	threadLogID    int64
-	threadIndex    int
-	threadTotal    int
-	err            error
-	width          int
-	height         int
-	quit           bool
+	mode                viewMode
+	reader              *database.LogReader
+	filter              database.QueryFilter
+	entries             []database.LogSummary
+	total               int64
+	cursor              int
+	detail              *database.LogEntry
+	streamView          streamViewState
+	detailReqBody       string // precomputed ellipsized request body
+	detailRespBody      string // precomputed ellipsized response body
+	scroll              int
+	thread              []threadMessage
+	threadScroll        int
+	threadLogID         int64
+	threadIndex         int
+	threadTotal         int
+	reasoningFolded     bool
+	exportPrefixPending bool
+	savePromptActive    bool
+	savePromptPath      string
+	savePromptKind      exportKind
+	detailStatus        string
+	err                 error
+	width               int
+	height              int
+	quit                bool
 }
 
 type streamViewState struct {
@@ -56,6 +64,15 @@ type threadMessage struct {
 	Content string
 	LogID   int64
 }
+
+type exportKind int
+
+const (
+	exportReqRaw exportKind = iota
+	exportRespRaw
+	exportAssembledContent
+	exportAssembledReasoning
+)
 
 type logsLoadedMsg struct {
 	entries []database.LogSummary
@@ -107,11 +124,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case logDetailMsg:
 		m.detail = msg.entry
 		m.streamView = streamViewState{
-			mode:   streamview.ModeRaw,
+			mode:   defaultDetailMode(msg.streamView),
 			result: msg.streamView,
 		}
 		m.mode = modeDetail
 		m.scroll = 0
+		m.reasoningFolded = true
+		m.exportPrefixPending = false
+		m.savePromptActive = false
+		m.savePromptPath = ""
+		m.detailStatus = ""
 		m.recomputeDetailBodies()
 		return m, nil
 
@@ -150,6 +172,55 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.mode == modeDetail {
+		if m.savePromptActive {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.savePromptActive = false
+				m.detailStatus = "Export canceled"
+				return m, nil
+			case tea.KeyEnter:
+				if err := m.commitExport(); err != nil {
+					m.detailStatus = fmt.Sprintf("Export failed: %v", err)
+				} else {
+					m.detailStatus = fmt.Sprintf("Saved to %s", m.savePromptPath)
+				}
+				m.savePromptActive = false
+				return m, nil
+			case tea.KeyBackspace:
+				if len(m.savePromptPath) > 0 {
+					m.savePromptPath = m.savePromptPath[:len(m.savePromptPath)-1]
+				}
+				return m, nil
+			case tea.KeyRunes:
+				m.savePromptPath += string(msg.Runes)
+				return m, nil
+			}
+			return m, nil
+		}
+		if m.exportPrefixPending {
+			m.exportPrefixPending = false
+			switch msg.String() {
+			case "b":
+				return m.startExportPrompt(exportReqRaw), nil
+			case "B":
+				return m.startExportPrompt(exportRespRaw), nil
+			case "c":
+				if !m.streamView.result.AssembledAvailable {
+					m.detailStatus = "Assembled export unavailable"
+					return m, nil
+				}
+				return m.startExportPrompt(exportAssembledContent), nil
+			case "R":
+				if !m.streamView.result.AssembledAvailable {
+					m.detailStatus = "Assembled export unavailable"
+					return m, nil
+				}
+				return m.startExportPrompt(exportAssembledReasoning), nil
+			default:
+				m.detailStatus = ""
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "esc", "q":
 			m.mode = modeTable
@@ -172,6 +243,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				m.recomputeDetailBodies()
 			}
+			return m, nil
+		case "z":
+			if m.streamView.mode == streamview.ModeAssembled && m.streamView.result.HasReasoning {
+				m.reasoningFolded = !m.reasoningFolded
+				m.recomputeDetailBodies()
+			}
+			return m, nil
+		case "x":
+			m.exportPrefixPending = true
+			m.detailStatus = "Export: b=req raw, B=resp raw, c=assembled content, R=assembled reasoning"
 			return m, nil
 		case "c":
 			e := m.detail
@@ -348,6 +429,9 @@ func (m Model) detailView() string {
 		svStatus,
 		m.detailRespBody,
 	}
+	if m.detailStatus != "" {
+		lines = append(lines, "", "Status: "+m.detailStatus)
+	}
 
 	viewH := m.height - 3
 	if viewH < 5 {
@@ -370,7 +454,14 @@ func (m Model) detailView() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view  c:conversation"))
+	if m.savePromptActive {
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("Save path: " + m.savePromptPath))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("enter:save  esc:cancel"))
+		return b.String()
+	}
+	b.WriteString(helpStyle.Render("esc/q:back  j/k:scroll  v:stream view  z:toggle reasoning  x:b/B/c/R export  c:conversation"))
 	return b.String()
 }
 
@@ -385,9 +476,30 @@ func (m *Model) recomputeDetailBodies() {
 
 	respBodyContent := fmtStrPtr(e.RespBody)
 	if m.streamView.mode == streamview.ModeAssembled && m.streamView.result.AssembledAvailable {
-		respBodyContent = m.streamView.result.AssembledBody
+		respBodyContent = m.assembledDisplayBody()
 	}
 	m.detailRespBody = ellipsizeBody(respBodyContent, 10000)
+}
+
+func (m Model) assembledDisplayBody() string {
+	var b strings.Builder
+	sv := m.streamView.result
+	if sv.HasReasoning {
+		if m.reasoningFolded {
+			b.WriteString("[Reasoning]\n  (folded, press z to expand)\n\n")
+		} else {
+			b.WriteString("[Reasoning]\n")
+			b.WriteString(ellipsizeBody(sv.ReasoningBody, 10000))
+			b.WriteString("\n\n")
+		}
+	}
+	b.WriteString("[Content]\n")
+	if sv.HasContent {
+		b.WriteString(ellipsizeBody(sv.ContentBody, 10000))
+	} else {
+		b.WriteString("(content missing)")
+	}
+	return b.String()
 }
 
 func (m Model) streamViewStatusLine() string {
@@ -402,6 +514,9 @@ func (m Model) streamViewStatusLine() string {
 	if sv.mode == streamview.ModeAssembled {
 		if sv.result.Reason == streamview.ReasonPartialParse {
 			return "Stream View: Assembled (partial parse)"
+		}
+		if !sv.result.HasContent {
+			return "Stream View: Assembled (content missing)"
 		}
 		return "Stream View: Assembled"
 	}
@@ -493,6 +608,75 @@ func fmtStatusPtr(s *int) string {
 		return strconv.Itoa(*s)
 	}
 	return "—"
+}
+
+func defaultDetailMode(sv streamview.Result) streamview.Mode {
+	if sv.AssembledAvailable {
+		return streamview.ModeAssembled
+	}
+	return streamview.ModeRaw
+}
+
+func (m Model) startExportPrompt(kind exportKind) Model {
+	m.savePromptActive = true
+	m.savePromptKind = kind
+	content := m.exportContentForKind(kind)
+	m.savePromptPath = defaultExportFilename(kind, content)
+	m.detailStatus = ""
+	return m
+}
+
+func (m Model) commitExport() error {
+	content := m.exportContentForKind(m.savePromptKind)
+	return os.WriteFile(m.savePromptPath, []byte(content), 0644)
+}
+
+func (m Model) exportContentForKind(kind exportKind) string {
+	if m.detail == nil {
+		return ""
+	}
+	switch kind {
+	case exportReqRaw:
+		return m.detail.ReqBody
+	case exportRespRaw:
+		return fmtStrPtr(m.detail.RespBody)
+	case exportAssembledReasoning:
+		return m.streamView.result.ReasoningBody
+	case exportAssembledContent:
+		return m.streamView.result.ContentBody
+	default:
+		return ""
+	}
+}
+
+func defaultExportFilename(kind exportKind, content string) string {
+	ext := "txt"
+	if isJSONContent(content) {
+		ext = "json"
+	}
+	switch kind {
+	case exportReqRaw:
+		return "request-body." + ext
+	case exportRespRaw:
+		return "response-body-parts." + ext
+	case exportAssembledReasoning:
+		return "response-reasoning-content." + ext
+	case exportAssembledContent:
+		return "response-body-assembled." + ext
+	default:
+		return "export." + ext
+	}
+}
+
+func isJSONContent(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return false
+	}
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return false
+	}
+	return json.Valid([]byte(trimmed))
 }
 
 func (m Model) loadThread(id int64) tea.Cmd {

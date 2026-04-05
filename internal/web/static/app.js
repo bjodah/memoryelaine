@@ -99,8 +99,8 @@
         }
     }
 
-    function bodyCacheKey(part, mode, full) {
-        return `${part}:${mode}:${full ? 'full' : 'preview'}`;
+    function bodyCacheKey(part, mode, full, section = 'all') {
+        return `${part}:${mode}:${section}:${full ? 'full' : 'preview'}`;
     }
 
     function isHelpOpen() {
@@ -301,6 +301,7 @@
     function closeDetailOverlay() {
         if (detailState) {
             detailState.copyPrefixPending = false;
+            detailState.exportPrefixPending = false;
         }
         detailState = null;
         clearDetailStatus();
@@ -472,18 +473,22 @@
         return part === 'resp' && state.currentMode === 'assembled' ? 'assembled' : 'raw';
     }
 
-    function getCachedBody(state, part, mode) {
-        return state.bodyCache.get(bodyCacheKey(part, mode, true)) || state.bodyCache.get(bodyCacheKey(part, mode, false)) || null;
+    function getCachedBody(state, part, mode, section = 'all') {
+        return state.bodyCache.get(bodyCacheKey(part, mode, true, section)) || state.bodyCache.get(bodyCacheKey(part, mode, false, section)) || null;
     }
 
     async function fetchBodyForState(state, part, mode, options = {}) {
         const full = !!options.full;
-        const cacheKey = bodyCacheKey(part, mode, full);
+        const section = options.section || 'all';
+        const cacheKey = bodyCacheKey(part, mode, full, section);
         if (state.bodyCache.has(cacheKey)) {
             return state.bodyCache.get(cacheKey);
         }
 
         let url = `/api/logs/${state.id}/body?part=${part}&mode=${mode}`;
+        if (mode === 'assembled' && part === 'resp') {
+            url += `&section=${encodeURIComponent(section)}`;
+        }
         if (full) {
             url += '&full=true';
         } else {
@@ -500,7 +505,7 @@
         if (isActiveDetailState(state)) {
             state.bodyCache.set(cacheKey, bodyData);
             if (full) {
-                state.bodyCache.set(bodyCacheKey(part, mode, false), bodyData);
+                state.bodyCache.set(bodyCacheKey(part, mode, false, section), bodyData);
             }
         }
         return bodyData;
@@ -533,13 +538,13 @@
         return mode === 'assembled' ? 'assembled response body' : 'response body';
     }
 
-    async function copyBody(part, mode, button) {
+    async function copyBody(part, mode, button, section = 'all') {
         const state = detailState;
         if (!state) {
             return;
         }
         await withBusyButton(button, 'Copying...', async () => {
-            const bodyData = await fetchBodyForState(state, part, mode, { full: true });
+            const bodyData = await fetchBodyForState(state, part, mode, { full: true, section });
             if (!isActiveDetailState(state)) {
                 return;
             }
@@ -548,6 +553,65 @@
                 return;
             }
             await copyToClipboard(bodyData.content || '', bodyButtonLabel(part, mode), button);
+        });
+    }
+
+    function inferFileExtension(content) {
+        const trimmed = (content || '').trim();
+        if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) {
+            return 'txt';
+        }
+        try {
+            JSON.parse(trimmed);
+            return 'json';
+        } catch (e) {
+            return 'txt';
+        }
+    }
+
+    function defaultExportFilename(part, mode, section, content) {
+        const ext = inferFileExtension(content);
+        if (part === 'req') {
+            return `request-body.${ext}`;
+        }
+        if (mode === 'raw') {
+            return `response-body-parts.${ext}`;
+        }
+        if (section === 'reasoning') {
+            return `response-reasoning-content.${ext}`;
+        }
+        return `response-body-assembled.${ext}`;
+    }
+
+    function triggerDownload(content, filename) {
+        const blob = new Blob([content || ''], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    async function exportBody(part, mode, section, button) {
+        const state = detailState;
+        if (!state) {
+            return;
+        }
+        await withBusyButton(button, 'Downloading...', async () => {
+            const bodyData = await fetchBodyForState(state, part, mode, { full: true, section });
+            if (!isActiveDetailState(state)) {
+                return;
+            }
+            if (!bodyData.available) {
+                showDetailStatus(`Body unavailable: ${bodyData.reason || 'not available'}`, 2500);
+                return;
+            }
+            const content = bodyData.content || '';
+            triggerDownload(content, defaultExportFilename(part, mode, section, content));
+            showDetailStatus(`Downloaded ${bodyButtonLabel(part, mode)}`, 1500);
         });
     }
 
@@ -619,6 +683,22 @@
         copyBtn.title = `Copy the canonical ${bodyButtonLabel(part, mode)}`;
         actions.appendChild(copyBtn);
 
+        const exportBtn = createButton('Download', 'detail-action-btn', event => {
+            void exportBody(part, mode, 'all', event.currentTarget);
+        });
+        exportBtn.dataset.exportKind = part === 'req' ? 'req-raw' : (mode === 'raw' ? 'resp-raw' : 'resp-assembled-content');
+        exportBtn.title = `Download the canonical ${bodyButtonLabel(part, mode)}`;
+        actions.appendChild(exportBtn);
+
+        if (part === 'resp' && mode === 'assembled') {
+            const exportReasoningBtn = createButton('Download Reasoning', 'detail-action-btn', event => {
+                void exportBody(part, mode, 'reasoning', event.currentTarget);
+            });
+            exportReasoningBtn.dataset.exportKind = 'resp-assembled-reasoning';
+            exportReasoningBtn.title = 'Download assembled reasoning_content';
+            actions.appendChild(exportReasoningBtn);
+        }
+
         const openBtn = createButton('Open', 'detail-action-btn', event => {
             void openBodyInspector(part, event.currentTarget);
         });
@@ -646,13 +726,40 @@
         info.textContent = infoText;
         container.appendChild(info);
 
-        const pre = document.createElement('pre');
-        const rendered = tryPrettyPrintJSON(bodyData.content || '');
-        pre.textContent = rendered.content;
-        if (rendered.pretty) {
-            pre.classList.add('json-pretty');
+        if (part === 'resp' && mode === 'assembled' && Array.isArray(bodyData.sections) && bodyData.sections.length > 0) {
+            bodyData.sections.forEach(section => {
+                const details = document.createElement('details');
+                details.className = 'assembled-section';
+                details.open = !section.folded;
+
+                const summary = document.createElement('summary');
+                summary.textContent = section.label || section.kind || 'Section';
+                details.appendChild(summary);
+
+                const pre = document.createElement('pre');
+                if (section.kind === 'content' && !section.content) {
+                    const placeholder = document.createElement('em');
+                    placeholder.textContent = '(content missing)';
+                    pre.appendChild(placeholder);
+                } else {
+                    const renderedSection = tryPrettyPrintJSON(section.content || '');
+                    pre.textContent = renderedSection.content;
+                    if (renderedSection.pretty) {
+                        pre.classList.add('json-pretty');
+                    }
+                }
+                details.appendChild(pre);
+                container.appendChild(details);
+            });
+        } else {
+            const pre = document.createElement('pre');
+            const rendered = tryPrettyPrintJSON(bodyData.content || '');
+            pre.textContent = rendered.content;
+            if (rendered.pretty) {
+                pre.classList.add('json-pretty');
+            }
+            container.appendChild(pre);
         }
-        container.appendChild(pre);
 
         if (!bodyData.complete) {
             const fullBtn = createButton('Load Full', 'load-body-btn', event => {
@@ -939,6 +1046,7 @@
             currentMode: 'raw',
             bodyCache: new Map(),
             copyPrefixPending: false,
+            exportPrefixPending: false,
             conversation: null,
             entry: null,
             sv: null
@@ -958,6 +1066,9 @@
             }
             state.entry = data.entry;
             state.sv = data.stream_view || {};
+            if (state.sv.default_mode === 'assembled' && state.sv.assembled_available) {
+                state.currentMode = 'assembled';
+            }
             renderDetail();
         } catch (e) {
             if (detailState === state) {
@@ -1052,6 +1163,51 @@
         return false;
     }
 
+    function handleExportPrefixKey(key) {
+        const state = detailState;
+        if (!state) {
+            return false;
+        }
+        state.exportPrefixPending = false;
+        const actions = document.getElementById('resp-body-actions');
+        switch (key) {
+            case 'b': {
+                const button = document.getElementById('req-body-actions')?.querySelector('[data-export-kind="req-raw"]');
+                if (button) {
+                    button.click();
+                    return true;
+                }
+                break;
+            }
+            case 'B': {
+                const button = actions?.querySelector('[data-export-kind="resp-raw"]');
+                if (button) {
+                    button.click();
+                    return true;
+                }
+                break;
+            }
+            case 'c': {
+                const button = actions?.querySelector('[data-export-kind="resp-assembled-content"]');
+                if (button) {
+                    button.click();
+                    return true;
+                }
+                break;
+            }
+            case 'R': {
+                const button = actions?.querySelector('[data-export-kind="resp-assembled-reasoning"]');
+                if (button) {
+                    button.click();
+                    return true;
+                }
+                break;
+            }
+        }
+        clearDetailStatus();
+        return false;
+    }
+
     function handleDetailKeydown(event) {
         const state = detailState;
         if (!state || !state.entry) {
@@ -1064,6 +1220,13 @@
         if (state.copyPrefixPending) {
             const handledPrefix = handleCopyPrefixKey(event.key);
             if (handledPrefix || ['h', 'b', 'H', 'B'].includes(event.key)) {
+                event.preventDefault();
+                return true;
+            }
+        }
+        if (state.exportPrefixPending) {
+            const handledExportPrefix = handleExportPrefixKey(event.key);
+            if (handledExportPrefix || ['b', 'B', 'c', 'R'].includes(event.key)) {
                 event.preventDefault();
                 return true;
             }
@@ -1122,7 +1285,14 @@
             }
             case 'w':
                 state.copyPrefixPending = true;
+                state.exportPrefixPending = false;
                 showDetailStatus('Copy: h=request headers, b=request body, H=response headers, B=response body', 2500);
+                event.preventDefault();
+                return true;
+            case 'x':
+                state.copyPrefixPending = false;
+                state.exportPrefixPending = true;
+                showDetailStatus('Download: b=request raw, B=response raw, c=assembled content, R=assembled reasoning', 3000);
                 event.preventDefault();
                 return true;
         }

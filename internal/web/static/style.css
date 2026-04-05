@@ -72,6 +72,9 @@ tbody tr.selected {
 .body-info { margin-bottom: 0.5rem; font-size: 0.82rem; color: var(--fg); opacity: 0.75; }
 .body-size-warning { margin: 0.2rem 0 0.4rem; font-size: 0.82rem; color: var(--fg); opacity: 0.8; }
 .json-pretty { word-break: break-word; }
+.assembled-section { margin-bottom: 0.6rem; border: 1px solid var(--border); border-radius: 4px; background: var(--alt-row); }
+.assembled-section summary { cursor: pointer; padding: 0.45rem 0.6rem; font-weight: 600; color: var(--accent); }
+.assembled-section pre { margin: 0 0.45rem 0.45rem; max-height: 220px; }
 .shortcut-status { font-size: 0.82rem; color: var(--fg); opacity: 0.75; }
 .help-section { margin-bottom: 1rem; }
 .help-shortcut-row { display: grid; grid-template-columns: minmax(150px, 240px) minmax(0, 1fr); gap: 0.75rem; align-items: baseline; margin: 0.35rem 0; }
