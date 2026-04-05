@@ -212,7 +212,8 @@ Supported viewers may offer:
 - `Raw`: exact stored response body, including SSE framing and event boundaries
 - `Assembled`: derived text reconstructed from supported streamed response
   formats, or a partial assembled result with explicit warning metadata when
-  recovery is possible
+  recovery is possible. For `/v1/chat/completions`, assembled mode separates
+  reasoning content from assistant content when both are present.
 
 ### 7.3 Scope of Assembled Mode
 
@@ -240,11 +241,22 @@ If any of these conditions fail, viewers must fall back to `Raw`.
 For `/v1/chat/completions`:
 
 - assemble text from streamed `choices[0].delta.content` fragments
+- accumulate `choices[0].delta.reasoning_content` fragments separately when
+  present
 - reject multi-choice streams as unsupported
 - reject tool-call / function-call streams as unsupported
 - handle empty `choices` arrays (e.g. usage-only chunks) by skipping the event
 - handle `choices[0].delta.content` being JSON `null` or absent by skipping
   the event
+
+The assembled result exposes:
+
+- `ContentBody`: concatenated `delta.content` fragments
+- `ReasoningBody`: concatenated `delta.reasoning_content` fragments
+- `HasContent` / `HasReasoning`: boolean flags indicating presence
+- `AssembledBody`: flat text helper equal to `ContentBody` (reasoning is
+  intentionally excluded from the flat representation to keep FTS indexing
+  and thread attribution focused on the assistant's visible response)
 
 For `/v1/completions`:
 
@@ -255,9 +267,10 @@ For `/v1/completions`:
 
 Assembled rendering is defined only for single-choice text streams.
 
-If the stream parses completely but yields no text content (e.g. role-only or
-usage-only deltas), assembled mode is unavailable and the viewer falls back to
-`Raw`.
+If the stream parses completely but yields no text content and no reasoning
+content (e.g. role-only or usage-only deltas), assembled mode is unavailable
+and the viewer falls back to `Raw`. If reasoning content is present but
+assistant content is absent, assembled mode is still available.
 
 If parsing fails only after some valid text has already been recovered, viewers
 may present the recovered text with a partial-warning state rather than
@@ -269,8 +282,12 @@ Stream view mode is required in:
 
 - the Terminal UI
 - the Web UI
+- the Emacs client
 
 It is not required in `memoryelaine log`.
+
+When assembled mode is available, all viewers default to assembled mode.
+Users can switch to raw mode at any time.
 
 ## 8. Database
 
@@ -560,7 +577,10 @@ Response shape:
   "entry": { /* log metadata with decoded headers */ },
   "stream_view": {
     "assembled_available": true,
-    "reason": "supported"
+    "reason": "supported",
+    "default_mode": "assembled",
+    "has_reasoning": false,
+    "has_content": true
   }
 }
 ```
@@ -573,6 +593,9 @@ Notes:
   `unsupported_path`, `unsupported_multi_choice`,
   `unsupported_tool_call_stream`, `no_text_content`, `not_sse`,
   `missing_body`, and `parse_failed`
+- `default_mode` is `"assembled"` when assembled is available, `"raw"` otherwise
+- `has_reasoning` indicates whether `reasoning_content` was found in the stream
+- `has_content` indicates whether `delta.content` was found in the stream
 
 ### 10.4.1 `/api/logs/{id}/body`
 
@@ -582,9 +605,17 @@ Query parameters:
 
 - `part`: `req` or `resp` (default: `resp`)
 - `mode`: `raw` or `assembled` (default: `raw`)
+- `section`: `all`, `content`, or `reasoning` (default: `all`; valid only for
+  `mode=assembled` with `part=resp`)
 - `full`: `true` or `false` (default: `false`)
 - `ellipsis`: positive integer rune limit for display-oriented JSON string
   shortening (optional)
+
+The `section` parameter selects which portion of the assembled body is returned
+in `content`. `section=all` and `section=content` both return the assistant
+content (reasoning is intentionally excluded from the flat representation for
+consistency with FTS and thread attribution). `section=reasoning` returns the
+reasoning content only.
 
 When `full=false`, the response is limited to `management.preview_bytes`
 (default: 65536). When `full=true`, the complete stored body is returned.
@@ -606,8 +637,23 @@ Response shape:
 {
   "part": "resp",
   "mode": "assembled",
+  "section": "all",
   "full": false,
   "content": "Hello world",
+  "sections": [
+    {
+      "kind": "reasoning",
+      "label": "Reasoning",
+      "content": "Let me think...",
+      "folded": true
+    },
+    {
+      "kind": "content",
+      "label": "Content",
+      "content": "Hello world",
+      "folded": false
+    }
+  ],
   "included_bytes": 11,
   "total_bytes": 42,
   "truncated": true,
@@ -620,6 +666,14 @@ Response shape:
 
 Notes:
 
+- `section` reflects the requested section filter (omitted for non-assembled
+  modes)
+- `sections` is present for `mode=assembled` responses. Each section has
+  `kind` (`"reasoning"` or `"content"`), `label`, `content`, and `folded`
+  (default fold state for UI rendering). The reasoning section is folded by
+  default when present; the content section is always expanded. On preview
+  requests (`full=false`), section content is truncated to `preview_bytes`.
+- `sections` may contain only a content section when no reasoning is present
 - `included_bytes` and `total_bytes` describe the bytes for the requested
   representation, not some other representation of the same body. For example,
   `mode=assembled` reports assembled-content byte counts, while `mode=raw`
@@ -810,9 +864,15 @@ Required detail behavior:
 - display request and response headers and bodies
 - request and response bodies use the shared JSON ellipsis transform for long
   string values before rendering
-- for supported streamed responses, toggle `Stream view mode` between `Raw` and
-  `Assembled`
+- for supported streamed responses, default to assembled mode when available;
+  toggle between `Raw` and `Assembled` with `v`
+- in assembled mode, display reasoning and content as separate labeled sections;
+  reasoning is folded by default and toggled with `z`
 - if the assembled result is partial, display a clear warning state
+- `x` opens an export prefix menu: `b` saves request raw body, `B` saves
+  response raw body, `c` saves assembled content, `R` saves assembled reasoning;
+  the user is prompted for a file path with a sensible default name (`.json`
+  when content is valid JSON, `.txt` otherwise)
 
 ### 12.1 Conversation View
 
@@ -840,10 +900,17 @@ Required capabilities:
 - visible runtime recording state
 - authenticated toggle of runtime recording state
 - detail overlay for a selected log entry
-- in the detail overlay, `Stream view mode` with `Raw` and `Assembled` where
-  assembled mode is available
+- in the detail overlay, default to assembled mode when available; provide
+  a `Raw` / `Assembled` toggle to switch between modes
+- in assembled mode, display reasoning and content as separate collapsible
+  sections. Reasoning sections are collapsed by default and rendered inside
+  `<details>` / `<summary>` elements.
 - when assembled mode is partial, show a warning state without rendering the
   content as HTML
+- download actions: each section (content, reasoning) can be individually
+  downloaded; JSON content is downloaded with MIME type `application/json`,
+  non-JSON content with `text/plain`. A status bar message confirms the
+  download action and names the section downloaded.
 
 ### 13.1 Conversation View
 
@@ -877,7 +944,10 @@ Two nullable sidecar columns hold derived searchable text:
   differs from `req_body`. `NULL` otherwise.
 - `resp_text` — populated only when extracted text differs from `resp_body`
   (streamed or non-streamed chat responses with extractable text). `NULL`
-  otherwise.
+  otherwise. For streamed responses with `reasoning_content`, `resp_text`
+  contains only the assembled assistant content (`delta.content`), not the
+  reasoning content. This is intentional: FTS search should match the
+  assistant's visible response, not internal chain-of-thought.
 
 FTS indexes use `COALESCE(req_text, req_body)` and
 `COALESCE(resp_text, resp_body)`, so all endpoints remain searchable without
@@ -1096,12 +1166,19 @@ headers, bodies, stream-view support, and entry navigation.
 
 - `g` refreshes the current entry
 - `v` toggles raw and assembled response view when assembled data is available
+- when assembled mode is available, it is the default view mode
+- in assembled mode, reasoning and content are rendered as separate named
+  sections with outline-style headings; reasoning is initially folded
 - `t` fetches canonical full request/response bodies on demand
 - `M-n` / `M-p` jump between section headings
 - `C-M-n` / `C-M-p` jump to the next or previous search result entry
 - `w h/b/H/B` copies request headers, request body, response headers, or
   response body; the body copy commands auto-fetch canonical full bodies before
   copying
+- `x b` saves request raw body to a file
+- `x B` saves response raw body to a file
+- `x c` saves assembled content section to a file
+- `x R` saves assembled reasoning section to a file
 - `j` and `J` open the request or response body in a dedicated JSON inspector
 
 The JSON inspector requires Emacs 29.1+, JSON tree-sitter support, and
@@ -1180,9 +1257,9 @@ implementation-defined application metrics.
 5. The Web UI detail endpoint returns both stored log data and derived
    stream-view metadata.
 6. The TUI can display supported streamed responses in `Raw` and `Assembled`
-   modes.
+   modes, defaulting to `Assembled` when available.
 7. The Web UI can display supported streamed responses in `Raw` and
-   `Assembled` modes.
+   `Assembled` modes, defaulting to `Assembled` when available.
 8. For partially recoverable streamed responses, viewers can display recovered
    assembled text with a warning state.
 9. For truncated, unsupported, or fully unparsable streamed responses, viewers
@@ -1192,7 +1269,8 @@ implementation-defined application metrics.
 12. `/last-request` and `/last-response` clearly indicate when their values are
     stale due to paused recording and subsequent loggable traffic.
 13. Searching for words from a streamed `/v1/chat/completions` assistant
-    response succeeds via FTS.
+    response succeeds via FTS. Reasoning content is intentionally excluded
+    from the FTS index.
 14. Searching non-chat endpoints still works via `COALESCE` fallback with no
     storage duplication.
 15. FTS remains correct after a full index rebuild (non-chat entries are not
@@ -1214,3 +1292,11 @@ implementation-defined application metrics.
 24. Emacs can open request and response bodies in a dedicated foldable JSON
     inspector, and body copy commands fetch canonical full content before
     copying.
+25. When `reasoning_content` is present in a `/v1/chat/completions` stream,
+    all three viewers display reasoning and content as separate labeled
+    sections (folded/collapsed by default for reasoning).
+26. TUI, Web UI, and Emacs provide export/download functionality for individual
+    assembled sections. JSON content uses `application/json` MIME type.
+27. The body API includes a `sections` array in assembled responses containing
+    structured section metadata. Section content is truncated on preview
+    requests.

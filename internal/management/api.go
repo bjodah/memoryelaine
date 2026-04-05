@@ -296,9 +296,7 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 		if !sv.AssembledAvailable {
 			resp.Reason = string(sv.Reason)
 		} else {
-			if full {
-				resp.Sections = assembledSectionsFromResult(sv)
-			}
+			resp.Sections = assembledSectionsFromResult(sv)
 			sourceBody = selectAssembledSectionBody(sv, section)
 			available = true
 			resp.TotalBytes = int64(len(sourceBody))
@@ -327,6 +325,17 @@ func handleBody(w http.ResponseWriter, r *http.Request, reader *database.LogRead
 			content = content[:previewBytes]
 			resp.Truncated = true
 			resp.Complete = false
+		}
+
+		// Apply the same preview limits to section content so preview responses
+		// stay bounded.
+		if !full && resp.Sections != nil {
+			for i := range resp.Sections {
+				sc := resp.Sections[i].Content
+				if len(sc) > previewBytes {
+					resp.Sections[i].Content = sc[:previewBytes]
+				}
+			}
 		}
 
 		resp.Content = content

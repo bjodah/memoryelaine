@@ -857,45 +857,6 @@ func TestBodyEndpoint_AssembledResponse(t *testing.T) {
 	if body.Section != "all" {
 		t.Errorf("expected section=all, got %s", body.Section)
 	}
-	// Preview request: sections omitted to keep response small.
-	if len(body.Sections) != 0 {
-		t.Fatalf("expected no sections on preview request, got %d", len(body.Sections))
-	}
-}
-
-func TestBodyEndpoint_AssembledResponseFullIncludesSections(t *testing.T) {
-	deps := setupTestDeps(t)
-	sseBody := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"}}]}\n\ndata: [DONE]\n\n"
-	insertAndFlush(t, deps, database.LogEntry{
-		TsStart:         1,
-		ClientIP:        "127.0.0.1",
-		RequestMethod:   "POST",
-		RequestPath:     "/v1/chat/completions",
-		UpstreamURL:     "https://example.com/v1/chat/completions",
-		ReqHeadersJSON:  "{}",
-		ReqBody:         `{"model":"gpt-4"}`,
-		ReqBytes:        17,
-		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
-		RespBody:        ptr(sseBody),
-		RespBytes:       int64(len(sseBody)),
-	})
-
-	srv := httptest.NewServer(NewMux(deps))
-	defer srv.Close()
-
-	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled&full=true")
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	var body BodyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !body.Available {
-		t.Fatalf("expected available=true, reason=%s", body.Reason)
-	}
 	if len(body.Sections) != 1 {
 		t.Fatalf("expected one section, got %d", len(body.Sections))
 	}
@@ -924,7 +885,7 @@ func TestBodyEndpoint_AssembledResponseReasoningSection(t *testing.T) {
 	srv := httptest.NewServer(NewMux(deps))
 	defer srv.Close()
 
-	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled&full=true")
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled")
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -986,6 +947,67 @@ func TestBodyEndpoint_AssembledResponseSelectReasoningSection(t *testing.T) {
 	}
 	if body.Content != "R" {
 		t.Errorf("expected reasoning content %q, got %q", "R", body.Content)
+	}
+}
+
+func TestBodyEndpoint_AssembledPreviewTruncatesSections(t *testing.T) {
+	deps := setupTestDeps(t)
+	deps.PreviewBytes = 5 // very small preview limit
+	longReasoning := strings.Repeat("R", 20)
+	longContent := strings.Repeat("C", 20)
+	sseBody := `data: {"choices":[{"index":0,"delta":{"reasoning_content":"` + longReasoning + `","content":"` + longContent + `"}}]}` + "\n\ndata: [DONE]\n\n"
+	insertAndFlush(t, deps, database.LogEntry{
+		TsStart:         1,
+		ClientIP:        "127.0.0.1",
+		RequestMethod:   "POST",
+		RequestPath:     "/v1/chat/completions",
+		UpstreamURL:     "https://example.com/v1/chat/completions",
+		ReqHeadersJSON:  "{}",
+		ReqBody:         `{"model":"gpt-4"}`,
+		ReqBytes:        17,
+		RespHeadersJSON: ptr(`{"Content-Type":["text/event-stream"]}`),
+		RespBody:        ptr(sseBody),
+		RespBytes:       int64(len(sseBody)),
+	})
+
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	// Preview request (full=false): section content should be truncated.
+	resp := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body BodyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(body.Sections))
+	}
+	for _, sec := range body.Sections {
+		if len(sec.Content) > deps.PreviewBytes {
+			t.Errorf("section %q content length %d exceeds preview limit %d", sec.Kind, len(sec.Content), deps.PreviewBytes)
+		}
+	}
+	if body.Sections[0].Content != longReasoning[:5] {
+		t.Errorf("expected truncated reasoning %q, got %q", longReasoning[:5], body.Sections[0].Content)
+	}
+
+	// Full request: section content should NOT be truncated.
+	resp2 := doAuthGet(t, srv, "/api/logs/1/body?part=resp&mode=assembled&full=true")
+	defer func() { _ = resp2.Body.Close() }()
+	var bodyFull BodyResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&bodyFull); err != nil {
+		t.Fatal(err)
+	}
+	if bodyFull.Sections[0].Content != longReasoning {
+		t.Errorf("full request should return complete reasoning, got %q", bodyFull.Sections[0].Content)
+	}
+	if bodyFull.Sections[1].Content != longContent {
+		t.Errorf("full request should return complete content, got %q", bodyFull.Sections[1].Content)
 	}
 }
 

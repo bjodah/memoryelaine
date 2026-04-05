@@ -490,13 +490,13 @@ func (m Model) assembledDisplayBody() string {
 			b.WriteString("[Reasoning]\n  (folded, press z to expand)\n\n")
 		} else {
 			b.WriteString("[Reasoning]\n")
-			b.WriteString(sv.ReasoningBody)
+			b.WriteString(truncStr(sv.ReasoningBody, 10000))
 			b.WriteString("\n\n")
 		}
 	}
 	b.WriteString("[Content]\n")
 	if sv.HasContent {
-		b.WriteString(sv.ContentBody)
+		b.WriteString(truncStr(sv.ContentBody, 10000))
 	} else {
 		b.WriteString("(content missing)")
 	}
