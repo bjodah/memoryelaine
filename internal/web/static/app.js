@@ -558,23 +558,30 @@
         }
         const mode = resolveBodyMode(state, part);
         await withBusyButton(button, 'Opening...', async () => {
-            const bodyData = await fetchBodyForState(state, part, mode, { full: true });
-            if (!isActiveDetailState(state)) {
-                return;
-            }
-            if (!bodyData.available) {
-                showDetailStatus(`Body unavailable: ${bodyData.reason || 'not available'}`, 2500);
-                return;
-            }
-
-            const rendered = tryPrettyPrintJSON(bodyData.content || '');
-            const win = window.open('', '_blank', 'noopener');
+            const win = window.open('', '_blank');
             if (!win) {
                 showDetailStatus('Inspector popup blocked by the browser', 2500);
                 return;
             }
+            win.document.write('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Loading…</title></head><body><p>Loading…</p></body></html>');
+            win.document.close();
 
+            const bodyData = await fetchBodyForState(state, part, mode, { full: true });
+            if (!isActiveDetailState(state)) {
+                win.close();
+                return;
+            }
+            if (!bodyData.available) {
+                showDetailStatus(`Body unavailable: ${bodyData.reason || 'not available'}`, 2500);
+                win.document.open();
+                win.document.write(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Body unavailable</title></head><body><p>${escapeHTML(bodyData.reason || 'Body unavailable')}</p></body></html>`);
+                win.document.close();
+                return;
+            }
+
+            const rendered = tryPrettyPrintJSON(bodyData.content || '');
             const title = `Log #${state.id} ${part === 'req' ? 'Request' : 'Response'} Body (${mode})`;
+            win.document.open();
             win.document.write(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -718,7 +725,8 @@
         }
 
         const bodyBytes = part === 'req' ? state.entry.req_bytes : state.entry.resp_bytes;
-        if (bodyBytes > AUTO_LOAD_THRESHOLD) {
+        const shouldGateLargeBody = !(part === 'resp' && mode === 'assembled');
+        if (shouldGateLargeBody && bodyBytes > AUTO_LOAD_THRESHOLD) {
             container.innerHTML = '';
             const warning = document.createElement('div');
             warning.className = 'body-size-warning';
@@ -1124,7 +1132,7 @@
 
     function handleGlobalKeydown(event) {
         if (isHelpOpen()) {
-            if (event.key === 'Escape' || event.key === 'u' || event.key === '?') {
+            if (event.key === 'Escape' || event.key === 'u' || event.key === 'q' || event.key === '?') {
                 closeHelpOverlay();
                 event.preventDefault();
             }
@@ -1204,6 +1212,11 @@
         if (event.key === 'Enter') {
             offset = 0;
             void loadLogs();
+            event.preventDefault();
+            return;
+        }
+        if (event.key === 'Escape') {
+            queryFilter.blur();
             event.preventDefault();
         }
     });
