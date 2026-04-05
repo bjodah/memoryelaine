@@ -2,6 +2,8 @@
 
 memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible inference APIs. It sits transparently between clients and one fixed upstream provider. Its primary purpose is to proxy requests with no intentional buffering of active streams while asynchronously logging selected request/response pairs, timings, and HTTP metadata to a local SQLite database.
 
+> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
+
 ## Quick Start
 
 ```bash
