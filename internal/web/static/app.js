@@ -23,7 +23,6 @@
     const autoRefresh = document.getElementById('auto-refresh');
     const recordingToggleBtn = document.getElementById('recording-toggle-btn');
     const detailOverlay = document.getElementById('detail-overlay');
-    const detailPanel = detailOverlay.querySelector('.detail-panel');
     const detailContent = document.getElementById('detail-content');
     const closeDetail = document.getElementById('close-detail');
     const helpOverlay = document.getElementById('help-overlay');
