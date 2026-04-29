@@ -7,11 +7,13 @@
 | 4 – CLI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
 | 3 – TUI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
 | 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` | ⏳ Pending |
-| 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` | ⏳ Pending |
+| 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` | ✅ **Done** |
 
-**CLI and TUI recordings are complete.** Output files in `demos/`:
+**CLI, TUI, and Emacs recordings are complete.** Output files in `demos/`:
 - `demos/demo-cli.gif` (903 KB, 1200×600) + `demos/demo-cli.mp4` (553 KB)
 - `demos/demo-tui.gif` (469 KB, 1600×700) + `demos/demo-tui.mp4` (251 KB)
+- `demos/demo-emacs-tui.gif` (324 KB, 1200×700) + `demos/demo-emacs-tui.mp4` (277 KB)
+- `demos/demo-emacs-gui.gif` (725 KB, 960×600) + `demos/demo-emacs-gui.mp4` (788 KB, 1280×800)
 
 ---
 
@@ -160,32 +162,43 @@ At FontSize=14, Width=1200 ≈ 140 terminal columns; Height=600 ≈ 35 rows.
 
 ### Demo 1 — Emacs client
 
-**Feasibility: ⭐⭐ — Two verified approaches; terminal path is simpler**
+**Feasibility: ⭐⭐ — ✅ Recording complete (both approaches)**
 
-Both the terminal (`-nw`) and GUI approaches were verified end-to-end:
+Both terminal (`-nw`) and GUI approaches were executed end-to-end:
 
-**Approach A: Terminal mode (`-nw`) via VHS**
+**Approach A: Terminal mode (`-nw`) via VHS — `demos/demo-emacs-tui.gif` + `.mp4`**
 - Emacs 30.2.50 loads the `memoryelaine` package cleanly in `-nw` mode
-- VHS tape automates key injection via ttyd; use `--eval '(memoryelaine)'` on startup to
-  skip the M-x minibuffer step and avoid timing issues
-- Same toolchain as CLI/TUI demos — minimal additional setup
-- Add generous `Sleep 4s–5s` around steps that trigger async HTTP curl calls
+- VHS tape automates key injection via ttyd; using `-l ./demos/demo-emacs-init.el` avoids
+  all quoting issues with `--eval` and inner double-quote escaping
+- Same toolchain as CLI/TUI — minimal additional setup
+- **Output:** `demos/demo-emacs-tui.gif` (324 KB, 1200×700) + `demos/demo-emacs-tui.mp4` (277 KB)
 
-**Approach B: GUI via Xvfb + openbox + ffmpeg + xdotool**
-- **Verified working** — `*memoryelaine*` buffer populated with 5 log entries in screenshot
-- Requires: `openbox` (EWMH WM for xdotool), `env -u EMACS_SOCKET` (sandbox sets this var
-  to an existing daemon socket — without clearing it, Lucid exits silently), `setsid` (not
-  `nohup`) to detach properly
-- Window lookup: `xdotool search --class "Emacs"` returns 3 IDs; filter by window name
-- `xdotool windowfocus --sync $WIN` prints a `BadMatch` X error that is non-fatal
-- More timing-sensitive than Approach A but produces a more visually impressive recording
+**Approach B: GUI via Xvfb + openbox + ffmpeg + xdotool — `demos/demo-emacs-gui.gif` + `.mp4`**
+- **Verified working** — `*memoryelaine*` buffer populated with all 12 log entries in recording
+- The automation showed M-x workflow, navigation, detail view, and "quantum" search filter
+- **Output:** `demos/demo-emacs-gui.mp4` (788 KB, 1280×800) + `demos/demo-emacs-gui.gif` (725 KB, 960px)
 
-**Common pitfalls:**
-- `EMACS_SOCKET` env var must be unset — this is the #1 silent failure cause
-- Refresh key is `g` (not `r`); `R` toggles recording mode; `s` edits the query
-- Allow ≥5 seconds after opening the buffer for async HTTP to complete
+**Bug found and fixed during recording:** The Emacs package's `memoryelaine-show--insert-headers`
+function did not handle JSON `null` headers (which `json-parse-string` represents as `:null`).
+The `dolist` call failed with "Wrong type argument: listp, :null" when `req_headers` or
+`resp_headers` were null in the database (as in seeded demo data). Fixed by adding
+`(eq headers :null)` to the guard condition, and the "Error: :null" display issue was fixed
+similarly. All 55 Emacs unit tests still pass.
 
-**Effort:** ~3–4 hours (Approach A); ~5–6 hours (Approach B or both)
+**Pitfalls encountered:**
+- Same pixel dimension / theme / PATH issues as CLI
+- Use `-l ./demos/demo-emacs-init.el` instead of `--eval` to avoid quoting complexity
+  when inner double-quotes need to appear in the eval string
+- The database cursor starts at the first entry (row 12, most recent); 2 Down presses
+  navigate to row 10 (not row 3); the "quantum" search filter still demonstrates FTS
+- `EMACS_SOCKET` env var must be unset for GUI approach — use `env -u EMACS_SOCKET`
+- `xdotool windowfocus --sync` prints a `BadMatch` X error that is non-fatal
+- The `kill -INT` sent to ffmpeg causes exit code 1 from the script but the mp4 is intact;
+  GIF conversion must be run separately if the script exits early
+- The GIF conversion is done via two-pass palette approach:
+  `fps=10,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse`
+
+**Effort:** ~2 hours (both approaches, including bug fix)
 
 ---
 
@@ -198,19 +211,20 @@ Both the terminal (`-nw`) and GUI approaches were verified end-to-end:
 
 ---
 
-## Helper scripts to create
+## Helper scripts created
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/demo-seed-db.py` | Creates `demos/demo.db` with 12 realistic rows |
-| `scripts/start-demo-server.sh` | Launches server with demo config, writes PID file |
-| `scripts/stop-demo-server.sh` | Kills server by PID |
-| `scripts/record-webui.py` | Playwright recording script for Web UI demo |
-| `scripts/record-emacs-gui.sh` | Shell + xdotool script for GUI Emacs demo |
-| `demos/demo-config.yaml` | Config pointing to `demos/demo.db`, port 18677/18687 |
-| `demos/demo-cli.tape` | VHS tape for CLI demo |
-| `demos/demo-tui.tape` | VHS tape for TUI demo |
-| `demos/demo-emacs-tui.tape` | VHS tape for Emacs terminal (`-nw`) demo |
+| Script | Purpose | Status |
+|--------|---------|--------|
+| `scripts/demo-seed-db.py` | Creates `demos/demo.db` with 12 realistic rows | ✅ Created |
+| `scripts/start-demo-server.sh` | Launches server with demo config, writes PID file | ✅ Created |
+| `scripts/stop-demo-server.sh` | Kills server by PID | ✅ Created |
+| `scripts/record-webui.py` | Playwright recording script for Web UI demo | ⏳ Pending |
+| `scripts/record-emacs-gui.sh` | Shell + xdotool script for GUI Emacs demo | ✅ Created |
+| `demos/demo-config.yaml` | Config pointing to `demos/demo.db`, port 18677/18687 | ✅ Created |
+| `demos/demo-cli.tape` | VHS tape for CLI demo | ✅ Created |
+| `demos/demo-tui.tape` | VHS tape for TUI demo | ✅ Created |
+| `demos/demo-emacs-tui.tape` | VHS tape for Emacs terminal (`-nw`) demo | ✅ Created |
+| `demos/demo-emacs-init.el` | Emacs Lisp init loaded by TUI tape (avoids quoting) | ✅ Created |
 
 ---
 

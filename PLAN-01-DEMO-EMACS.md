@@ -8,14 +8,8 @@ request/response detail.
 
 Two distinct approaches are available — choose either or produce both:
 
-| | **Approach A: Terminal (`-nw`) via VHS** | **Approach B: GUI via Xvfb + ffmpeg** |
-|---|---|---|
-| Output format | `.gif` (or `.mp4` via ffmpeg) | `.mp4` |
-| Automation | VHS tape DSL | Shell script + `xdotool` |
-| Setup complexity | Low | Medium |
-| Visual style | Styled terminal (Monokai, etc.) | Real Emacs GUI (toolbar, menu bar) |
-| Reproducibility | High (deterministic tape) | Medium (timing-sensitive) |
-| Verified working | ✅ | ✅ |
+| Approach A: Terminal (`-nw`) via VHS | ✅ **Done** — `demos/demo-emacs-tui.gif` (324 KB) + `.mp4` (277 KB) |
+| Approach B: GUI via Xvfb + ffmpeg | ✅ **Done** — `demos/demo-emacs-gui.mp4` (788 KB) + `.gif` (725 KB) |
 
 ---
 
@@ -30,7 +24,7 @@ Two distinct approaches are available — choose either or produce both:
 | xdotool (GUI key injection) | ✅ installed via `apt-get install xdotool` |
 | ffmpeg x11grab screen capture | ✅ tested end-to-end, produces `.mp4` |
 | VHS terminal recorder | ✅ `~/go/bin/vhs` — works with `VHS_NO_SANDBOX=1` |
-| ttyd | ✅ installed at `/usr/local/bin/ttyd` (required by VHS) |
+| ttyd | ✅ installed at `/opt-3/ttyd/bin/ttyd` (required by VHS) — **NOT** `/usr/local/bin/ttyd` |
 | `EMACS_SOCKET` env var pitfall | ⚠️ must `unset EMACS_SOCKET` before launching GUI Emacs |
 
 > **Critical note on `EMACS_SOCKET`:** the sandbox environment sets `EMACS_SOCKET` pointing
@@ -147,40 +141,56 @@ GIF that looks like a normal terminal recording. No X server or window manager i
 
 ### VHS tape (`demos/demo-emacs-tui.tape`)
 
+> **Recommended pattern:** use a separate `-l ./demos/demo-emacs-init.el` init file instead
+> of `--eval '...'` inside the VHS tape. The eval approach requires double-quote escaping
+> that is extremely fragile inside VHS `Type` strings. The init file avoids all quoting
+> entirely.
+
+**`demos/demo-emacs-init.el`** (loaded by tape via `-l` flag):
+
+```elisp
+;; Init file loaded by VHS tape — avoids shell quoting complexity
+(require 'memoryelaine)
+(setq memoryelaine-base-url "http://127.0.0.1:18677"
+      memoryelaine-username "demo"
+      memoryelaine-password "demo1234")
+(memoryelaine)
+```
+
+**`demos/demo-emacs-tui.tape`** (actual tape used for recording):
+
 ```tape
 Output demos/demo-emacs-tui.gif
 Set Shell "bash"
 Set FontSize 14
-Set Width 220
-Set Height 52
-Set Theme "Monokai"
-Set TypingSpeed 60ms
+Set Width 1200
+Set Height 700
+Set Theme "Dracula"
 
-# Launch Emacs in terminal mode with the memoryelaine package
-Type "EMACS=/opt-3/emacs-30-lucid/bin/emacs"
+# Start server in background
+Type "cd /work && ./demos/memoryelaine serve --config demos/demo-config.yaml &"
 Enter
-Type "$EMACS -nw -Q -L ./emacs-memoryelaine \\"
-Enter
-Type "  --eval '(progn (require (quote memoryelaine)) (setq memoryelaine-base-url \"http://127.0.0.1:18677\" memoryelaine-username \"admin\" memoryelaine-password \"changeme\") (memoryelaine))'"
-Enter
-Sleep 4s
+Sleep 2s
 
-# Now inside Emacs — the *memoryelaine* search buffer should be open
-# Navigate down to a row
+# Launch Emacs -nw, loading the init file that calls (memoryelaine)
+Type "/opt-3/emacs-30-lucid/bin/emacs -nw -Q -L ./emacs-memoryelaine -l ./demos/demo-emacs-init.el"
+Enter
+Sleep 5s
+
+# Navigate down 2 rows, open detail view
 Down
 Down
 Sleep 500ms
-
-# Open detail view (RET)
 Enter
-Sleep 3s
+Sleep 4s
 
-# Go back to list (q or Escape)
-Ctrl+x
-Ctrl+k
+# Go back to list
+Type "q"
+Sleep 1s
 
-# Type a search query (s key)
+# Filter by query (s key)
 Type "s"
+Sleep 200ms
 Type "quantum"
 Enter
 Sleep 3s
@@ -189,12 +199,6 @@ Sleep 3s
 Ctrl+x
 Ctrl+c
 ```
-
-> **Tips:**
-> - Use `--eval '...(memoryelaine)...'` to call `M-x memoryelaine` automatically on startup —
->   avoids the VHS `Alt+x` minibuffer timing uncertainty.
-> - Add `Sleep 3s` after any step that triggers an async HTTP curl call.
-> - Increase `Set Height` if the tabulated list truncates columns.
 
 ### Run the tape
 
@@ -362,16 +366,31 @@ bash scripts/record-emacs-gui.sh
 | Refresh key is `g` | Not `r` or `R`; `R` toggles recording mode |
 | Allow ≥5s after `memoryelaine` M-x | Package uses async curl subprocesses; buffer takes time to populate |
 | `-Q` flag | Required to skip the sandbox's heavy user config (dark theme, use-package noise) |
+| **`:null` bug fixed** | `json-parse-string` maps JSON `null` → `:null` (truthy non-list); `dolist` raised "Wrong type argument: listp, :null" in `memoryelaine-show--insert-headers`. **Fixed** by guarding `(eq headers :null)`. All 55 unit tests pass. |
+| GIF conversion — run separately | `kill -INT ffmpeg` in cleanup causes script exit code 1; run the two-pass palette GIF step separately after verifying the `.mp4` exists |
+
+### GIF conversion command
+
+```bash
+ffmpeg -y -i demos/demo-emacs-gui.mp4 \
+  -vf "fps=10,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse" \
+  demos/demo-emacs-gui.gif
+```
 
 ---
 
-## Expected output
+## Output produced
 
-A ~20–30 second GIF or MP4 showing:
-1. Emacs opens (scratch buffer for `-nw`, or GUI frame for Approach B)
-2. `M-x memoryelaine` opens the `*memoryelaine*` search buffer listing log entries
-3. User navigates down and opens a detail view
-4. User types a filter query and the list refreshes
+| File | Size | Notes |
+|------|------|-------|
+| `demos/demo-emacs-tui.gif` | 324 KB, 1200×700 | Terminal Emacs, clean recording |
+| `demos/demo-emacs-tui.mp4` | 277 KB | Converted from GIF |
+| `demos/demo-emacs-gui.mp4` | 788 KB, 1280×800, 47.6s | Full GUI recording |
+| `demos/demo-emacs-gui.gif` | 725 KB, 960px wide | Two-pass palette GIF |
+
+Recording shows:
+1. Emacs opens (scratch buffer for TUI; GUI frame for Approach B)
+2. `M-x memoryelaine` (or auto-loaded via init file) opens the `*memoryelaine*` search buffer with 12 entries
+3. Navigate down 2 rows → open detail view (entry #10 — "List 5 sorting algorithms")
+4. Return to list → type `s` → `quantum` → 2 matching results
 5. Emacs exits
-
-Both approaches produce a compelling, authentic demo of the Emacs client.
