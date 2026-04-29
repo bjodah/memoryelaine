@@ -12,11 +12,19 @@ using the status filter.
 
 | Item | Status |
 |------|--------|
-| VHS `v0.11.0` | ✅ `~/go/bin/vhs` |
-| ttyd `v1.7.4` | ✅ `/usr/local/bin/ttyd` (VHS dependency) |
-| `VHS_NO_SANDBOX=1` workaround | ✅ verified — bypasses chromium root sandbox error |
+| VHS `v0.11.0` | ✅ `~/go/bin/vhs` (installed via `go install`) |
+| ttyd `v1.7.7` | ✅ `/opt-3/ttyd/bin/ttyd` (not at `/usr/local/bin` — must export PATH) |
+| `VHS_NO_SANDBOX=1` workaround | ✅ required as root |
 | `memoryelaine tui` command | ✅ implemented via charmbracelet/bubbletea |
-| GIF output from VHS | ✅ verified (`1200×600`, 11 KB for simple demo) |
+| GIF output from VHS | ✅ verified — `demos/demo-tui.gif` (469 KB, 1600×700, 526 frames) |
+| MP4 output | ✅ verified — `demos/demo-tui.mp4` (251 KB) |
+| Key injection via VHS | ✅ `j`/`k`/`v`/`f`/`q`/`Enter`/`Escape` all work — bubbletea receives them correctly |
+
+## ✅ Recording complete
+
+Output files produced:
+- `demos/demo-tui.gif` — 469 KB, 1600×700 px, ~21s, 526 frames
+- `demos/demo-tui.mp4` — 251 KB, H.264/yuv420p
 
 ---
 
@@ -45,6 +53,7 @@ python3 scripts/demo-seed-db.py --out demos/demo.db --rows 12
 ### 2. Start the management server (TUI reads from same DB)
 
 ```bash
+export PATH="$HOME/go/bin:/opt-3/ttyd/bin:$PATH"
 ./demos/memoryelaine serve --config demos/demo-config.yaml &
 sleep 2
 ```
@@ -55,12 +64,22 @@ during the demo. For a purely static demo of the stored logs, the server is opti
 
 ### 3. Write the VHS tape (`demos/demo-tui.tape`)
 
+> **Key learnings from recording:**
+> - `Set Width` and `Set Height` are in **pixels**, not terminal columns/rows
+> - Minimum pixel dimension: **120×120** (enforced by VHS validation)
+> - Pagination keys `n`/`p` are no-ops with 12 seed rows (limit=50); removed from tape
+> - Status filter cycles exactly: nil → 200 → 400 → 500 → nil (exact match, not 4xx/5xx)
+>   so seed data must include rows with `status_code = 400` and `status_code = 500` exactly
+> - The `v` stream-view toggle requires a row with `AssembledAvailable=true` — requires a
+>   proper SSE `resp_body`; row 3 (quantum, gpt-4o, status 200) has this in the seed data
+> - ttyd is at `/opt-3/ttyd/bin/ttyd`, must be on PATH
+
 ```tape
 Output demos/demo-tui.gif
 Set Shell "bash"
 Set FontSize 13
-Set Width 220
-Set Height 50
+Set Width 1600
+Set Height 700
 Set Theme "Dracula"
 Set TypingSpeed 80ms
 
@@ -77,7 +96,7 @@ Sleep 300ms
 Down
 Sleep 400ms
 
-# Open detail view for selected entry
+# Open detail view for selected entry (row 3: quantum — has SSE resp body)
 Enter
 Sleep 2s
 
@@ -85,7 +104,7 @@ Sleep 2s
 Down
 Down
 Down
-Sleep 500ms
+Sleep 300ms
 
 # Toggle stream view: Raw → Assembled
 Type "v"
@@ -102,24 +121,17 @@ Sleep 1000ms
 
 # Close detail view
 Escape
-Sleep 500ms
+Sleep 700ms
 
-# Apply status filter (cycle: none → 200 → 400 → 500)
+# Apply status filter (cycle: all → 200 → 400 → 500 → all)
 Type "f"
-Sleep 800ms
-Type "f"
-Sleep 800ms
-Type "f"
-Sleep 800ms
-Type "f"
-Sleep 500ms
-
-# Next page
-Type "n"
 Sleep 1000ms
-# Previous page
-Type "p"
-Sleep 500ms
+Type "f"
+Sleep 1000ms
+Type "f"
+Sleep 1000ms
+Type "f"
+Sleep 700ms
 
 # Refresh
 Type "r"
@@ -134,15 +146,16 @@ Sleep 500ms
 
 ```bash
 cd /work
+export PATH="$HOME/go/bin:/opt-3/ttyd/bin:$PATH"
 VHS_NO_SANDBOX=1 vhs demos/demo-tui.tape
 ```
 
 Output: `demos/demo-tui.gif`
 
-### 5. (Optional) Convert to MP4
+### 5. Convert to MP4
 
 ```bash
-ffmpeg -i demos/demo-tui.gif \
+ffmpeg -y -i demos/demo-tui.gif \
   -movflags faststart -pix_fmt yuv420p \
   -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
   demos/demo-tui.mp4
@@ -154,9 +167,9 @@ ffmpeg -i demos/demo-tui.gif \
 
 ### Terminal dimensions
 
-The TUI uses a table with 8 columns. Width ≥ 200 characters keeps all columns visible
-without truncation. `Set Height 50` gives 50 rows — enough for the table header + ~10 data
-rows + status bar.
+`Set Width` / `Set Height` in VHS 0.11.0 are **pixel** dimensions, not character columns/rows.
+Width=1600, Height=700 at FontSize=13 gives approximately 195 columns × 40 rows — enough
+for the TUI table with all columns visible.
 
 ### Timing
 

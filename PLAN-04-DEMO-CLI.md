@@ -12,20 +12,28 @@ demo.
 
 | Item | Status |
 |------|--------|
-| VHS `v0.11.0` | ✅ `~/go/bin/vhs` |
-| ttyd `v1.7.4` | ✅ `/usr/local/bin/ttyd` |
-| `VHS_NO_SANDBOX=1` workaround | ✅ verified |
+| VHS `v0.11.0` | ✅ `~/go/bin/vhs` (installed via `go install`) |
+| ttyd `v1.7.7` | ✅ `/opt-3/ttyd/bin/ttyd` (not at `/usr/local/bin` — must export PATH) |
+| `VHS_NO_SANDBOX=1` workaround | ✅ required as root |
 | Binary (`memoryelaine log`) | ✅ tested with seed DB — table output works |
-| GIF output | ✅ verified working |
+| GIF output | ✅ verified working — `demos/demo-cli.gif` (903 KB, 1200×600, 768 frames) |
+| MP4 output | ✅ verified working — `demos/demo-cli.mp4` (553 KB) |
 | `memoryelaine log -f table -n 5` | ✅ outputs 5 rows in ASCII table |
+| FTS search (`-q "quantum"`) | ✅ returns 2 matching rows as expected |
 
 **Sample verified output:**
 ```
 ID  TIME      METHOD  PATH                  STATUS  DURATION  REQ SIZE  RESP SIZE
-5   10:39:38  POST    /v1/chat/completions  200     2341ms    121       212
-4   10:38:38  POST    /v1/chat/completions  401     45ms      95        76
+12  11:27:34  POST    /v1/chat/completions  200     1102ms    122       547
+11  11:22:34  POST    /v1/chat/completions  200     156ms      98       256
 ...
 ```
+
+## ✅ Recording complete
+
+Output files produced:
+- `demos/demo-cli.gif` — 903 KB, 1200×600 px, ~30s, 768 frames
+- `demos/demo-cli.mp4` — 553 KB, H.264/yuv420p
 
 ---
 
@@ -41,24 +49,32 @@ captures the output as a GIF — no servers, no GUI, no fragility.
 ### 1. Prerequisites
 
 ```bash
-export PATH="$HOME/go/bin:$PATH"
-vhs --version
+export PATH="$HOME/go/bin:/opt-3/ttyd/bin:$PATH"
+vhs --version   # v0.11.0
 
 CGO_ENABLED=1 go build -tags sqlite_fts5 -o ./demos/memoryelaine .
-python3 scripts/demo-seed-db.py --out demos/demo.db --rows 12
+python3 scripts/demo-seed-db.py --out demos/demo.db
 ```
 
 No server needs to be running — the `log` command reads the SQLite DB directly.
 
 ### 2. Write the VHS tape (`demos/demo-cli.tape`)
 
+> **Key learnings from recording:**
+> - `Set Width` and `Set Height` are in **pixels**, not terminal columns/rows
+> - Minimum pixel dimension: **120×120** (enforced by VHS validation)
+> - Use `Set Theme "Monokai Remastered"` — `"Monokai"` is not a valid VHS theme name
+> - Use non-default config credentials to suppress the `slog.Warn` about default creds
+> - The `--query "path:…"` DSL was removed from the tape since that flag doesn't exist;
+>   use `--path` for path filter and `-q` for FTS
+
 ```tape
 Output demos/demo-cli.gif
 Set Shell "bash"
 Set FontSize 14
-Set Width 160
-Set Height 40
-Set Theme "Monokai"
+Set Width 1200
+Set Height 600
+Set Theme "Monokai Remastered"
 Set TypingSpeed 60ms
 
 # Set up the alias for brevity in the demo
@@ -77,12 +93,7 @@ Enter
 Sleep 1500ms
 
 # --- Filter by status 200 ---
-Type "me log --config demos/demo-config.yaml -f table --status 200"
-Enter
-Sleep 1500ms
-
-# --- Query DSL: search by path and method ---
-Type `me log --config demos/demo-config.yaml -f table --query "path:/v1/chat/completions method:POST"`
+Type "me log --config demos/demo-config.yaml -f table --status 200 -n 5"
 Enter
 Sleep 1500ms
 
@@ -92,7 +103,7 @@ Enter
 Sleep 1500ms
 
 # --- Single record (JSON) ---
-Type "me log --config demos/demo-config.yaml --id 3"
+Type "me log --config demos/demo-config.yaml -f json --id 3"
 Enter
 Sleep 2s
 
@@ -106,6 +117,7 @@ Sleep 1500ms
 
 ```bash
 cd /work
+export PATH="$HOME/go/bin:/opt-3/ttyd/bin:$PATH"
 VHS_NO_SANDBOX=1 vhs demos/demo-cli.tape
 ```
 

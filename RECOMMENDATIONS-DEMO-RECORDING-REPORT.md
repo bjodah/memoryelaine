@@ -2,15 +2,16 @@
 
 ## TL;DR
 
-| Demo | Feasibility | Recommended tool | Output |
-|------|------------|-----------------|--------|
-| 4 – CLI | ⭐⭐⭐ **Easiest** | VHS | `.gif` |
-| 3 – TUI | ⭐⭐⭐ **Easiest** | VHS | `.gif` |
-| 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` |
-| 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` |
+| Demo | Feasibility | Recommended tool | Output | Status |
+|------|------------|-----------------|--------|--------|
+| 4 – CLI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
+| 3 – TUI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
+| 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` | ⏳ Pending |
+| 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` | ⏳ Pending |
 
-**Start with CLI and TUI** — they share a toolchain, share seed infrastructure, and each
-takes under 30 minutes end-to-end. Tackle Web UI next. Leave Emacs for last.
+**CLI and TUI recordings are complete.** Output files in `demos/`:
+- `demos/demo-cli.gif` (903 KB, 1200×600) + `demos/demo-cli.mp4` (553 KB)
+- `demos/demo-tui.gif` (469 KB, 1600×700) + `demos/demo-tui.mp4` (251 KB)
 
 ---
 
@@ -22,65 +23,45 @@ takes under 30 minutes end-to-end. Tackle Web UI next. Leave Emacs for last.
 CGO_ENABLED=1 go build -tags sqlite_fts5 -o ./demos/memoryelaine .
 ```
 
-### 2. Create `scripts/demo-seed-db.py`
+### 2. `scripts/demo-seed-db.py` ✅ created
 
-A single Python script that populates `demos/demo.db` with realistic log rows.
-Suggested rows (12 total):
+A Python script that populates `demos/demo.db` with 12 realistic log rows.
+Run: `python3 scripts/demo-seed-db.py --out demos/demo.db`
+
+> **Note:** Row 4 uses `status_code=400` (not 401) because the TUI status filter
+> uses **exact** match (`status_code = 400`). A 401 row would not appear when the
+> filter is set to 400. Similarly row 8 uses `status_code=500` exactly.
+> The original plan listed a 401 row — this was corrected in the seed script.
 
 | # | Model | User prompt | Status | Notes |
 |---|-------|-------------|--------|-------|
 | 1 | gpt-4o | "What is the capital of France?" | 200 | Short, fast |
 | 2 | gpt-4o-mini | "Write a Python function to reverse a string" | 200 | Code response |
 | 3 | gpt-4o | "Explain quantum entanglement in simple terms" | 200 | FTS demo keyword |
-| 4 | gpt-4o | (bad API key) | 401 | Error demo |
+| 4 | gpt-4o | (bad request) | **400** | Error demo — exact match for TUI filter |
 | 5 | gpt-4o-mini | "Summarize the history of computing" | 200 | Longer response |
 | 6 | claude-3-5-sonnet | "What is 2+2?" | 200 | Different model |
 | 7 | gpt-4o | "Translate 'hello' to Spanish" | 200 | Short |
-| 8 | gpt-4o | (upstream 500) | 500 | Error demo |
-| 9 | gpt-o1 | "Solve this math problem step by step: …" | 200 | Has `<think>` / reasoning block |
+| 8 | gpt-4o | (upstream error) | **500** | Error demo — exact match for TUI filter |
+| 9 | o1 | "Solve: 10th Fibonacci number" | 200 | SSE reasoning_content chunks |
 | 10 | gpt-4o-mini | "List 5 sorting algorithms" | 200 | Longer |
 | 11 | gpt-4o | "What time is it?" | 200 | Trivial |
 | 12 | gpt-4o | "Generate a JSON schema for a user object" | 200 | JSON in response |
 
-Row 9 must have a proper `<think>…</think>` block in the response body so the
-stream-view `v` / `z` toggles in the TUI and Web UI are actually meaningful.
+Row 9 uses `reasoning_content` SSE chunks (not `<think>` tags) to trigger the
+`v` stream-view toggle and `z` fold toggle in the TUI.
 
-**Template for SSE response body (rows 1–3, 5–7, 10–12):**
-```
-data: {"id":"chatcmpl-001","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"delta":{"role":"assistant","content":"The capital of France is Paris."},"index":0}]}
+### 3. `demos/demo-config.yaml` ✅ created
 
-data: [DONE]
-
-```
-
-**Template for row 9 (reasoning):**
-```
-data: {"id":"chatcmpl-009","object":"chat.completion.chunk","model":"o1","choices":[{"delta":{"reasoning_content":"Let me think about this…","content":""},"index":0}]}
-
-data: {"id":"chatcmpl-009","object":"chat.completion.chunk","model":"o1","choices":[{"delta":{"reasoning_content":"","content":"The answer is 42."},"index":0}]}
-
-data: [DONE]
-
-```
-
-### 3. Create `demos/demo-config.yaml`
+> **Critical:** Do NOT use `username: admin / password: changeme` — the config
+> validator emits `slog.Warn` unconditionally for default credentials, which appears
+> as a noisy line in every CLI command output during recording.
 
 ```yaml
-proxy:
-  listen_addr: "127.0.0.1:18687"
-  upstream_base_url: "https://api.openai.com"
-  log_paths:
-    - "/v1/chat/completions"
-    - "/v1/completions"
 management:
-  listen_addr: "127.0.0.1:18677"
   auth:
-    username: "admin"
-    password: "changeme"
-database:
-  path: "./demos/demo.db"
-logging:
-  level: "warn"   # suppress noisy INFO lines during recording
+    username: "demo"
+    password: "demo1234"
 ```
 
 ### 4. Shared helper script `scripts/start-demo-server.sh`
@@ -96,11 +77,28 @@ curl -sf http://127.0.0.1:18677/health > /dev/null && echo "Server ready"
 
 ### 5. Ensure VHS + ttyd are on PATH
 
+> **Critical:** ttyd is at `/opt-3/ttyd/bin/ttyd`, **not** `/usr/local/bin/ttyd`.
+> VHS will silently fail or error if ttyd is not on PATH.
+
 ```bash
-export PATH="$HOME/go/bin:/usr/local/bin:$PATH"
-# VHS_NO_SANDBOX=1 must be set when running as root
-export VHS_NO_SANDBOX=1
+export PATH="$HOME/go/bin:/opt-3/ttyd/bin:$PATH"
+export VHS_NO_SANDBOX=1   # required when running as root
 ```
+
+### 6. VHS dimension gotcha
+
+`Set Width` and `Set Height` in VHS tape files are **pixel** dimensions, not
+terminal character columns/rows. The minimum is 120×120 pixels. Typical values:
+- CLI: `Set Width 1200` `Set Height 600`
+- TUI: `Set Width 1600` `Set Height 700`
+
+At FontSize=14, Width=1200 ≈ 140 terminal columns; Height=600 ≈ 35 rows.
+
+### 7. Theme name gotcha
+
+`Set Theme "Monokai"` is **not valid** — VHS will error. Use:
+- `"Monokai Remastered"` (for CLI / warmer look)
+- `"Dracula"` (for TUI / cooler dark look)
 
 ---
 
@@ -108,29 +106,38 @@ export VHS_NO_SANDBOX=1
 
 ### Demo 4 — CLI (`memoryelaine log`)
 
-**Feasibility: ⭐⭐⭐ — Verified working end-to-end during exploration**
+**Feasibility: ⭐⭐⭐ — ✅ Recording complete**
 
-- `VHS_NO_SANDBOX=1 vhs demos/demo-cli.tape` produces a GIF in ~10 seconds
+- `VHS_NO_SANDBOX=1 vhs demos/demo-cli.tape` produces a GIF in ~60s (first run downloads Chromium)
 - No server required (the `log` command reads SQLite directly)
 - Zero fragility: output is deterministic, no network calls, no timing sensitivity
-- The demo showcases the query DSL, format options, and FTS — all compelling features
+- The demo showcases FTS, status filter, JSON/JSONL format options — compelling features
+- **Output:** `demos/demo-cli.gif` (903 KB, 1200×600) + `demos/demo-cli.mp4` (553 KB)
 
-**Effort:** ~1 hour (write tape + seed script + minor polish)
+**Pitfalls encountered:**
+- `Set Width`/`Set Height` are pixels not characters; must be ≥120×120
+- `Set Theme "Monokai"` is invalid — use `"Monokai Remastered"`
+- Default credentials in config emit a `slog.Warn` line before every command
+- ttyd is at `/opt-3/ttyd/bin/ttyd`, must add to PATH
 
 ---
 
 ### Demo 3 — TUI (`memoryelaine tui`)
 
-**Feasibility: ⭐⭐⭐ — Verified infrastructure, one open question**
+**Feasibility: ⭐⭐⭐ — ✅ Recording complete (open question resolved)**
 
-- Same VHS toolchain as CLI — trivial setup
-- The TUI is a bubbletea fullscreen app; it renders correctly in VHS's ttyd terminal
-- **Open question:** VHS injects keys via the terminal, not a PTY-level signal. Test that
-  `j`/`k`/`Enter`/`v`/`f`/`q` are received correctly by bubbletea. If not, use `Down` /
-  `Up` / `Return` VHS keywords which map to ANSI escape sequences.
+- Same VHS toolchain as CLI — same pitfalls apply (pixel dims, theme name, PATH)
+- The TUI is a bubbletea fullscreen app; renders correctly in VHS's ttyd terminal
+- **Open question resolved:** `j`/`k`/`Enter`/`v`/`f`/`q`/`Escape` all work
+  — bubbletea receives them correctly via VHS key injection
 - The `z` fold toggle and `x b`/`x c` export flow can be included as bonus scenes
+- **Output:** `demos/demo-tui.gif` (469 KB, 1600×700) + `demos/demo-tui.mp4` (251 KB)
 
-**Effort:** ~1.5 hours (write tape, tune key timings, seed reasoning row)
+**Pitfalls encountered:**
+- Same pixel dimension / theme / PATH issues as CLI
+- Pagination (`n`/`p`) is a no-op with 12 rows (limit=50); removed from tape
+- Status filter uses exact match: seed data must use `status_code=400` and `status_code=500`
+  (not 401 as originally planned)
 
 ---
 
@@ -209,19 +216,19 @@ Both the terminal (`-nw`) and GUI approaches were verified end-to-end:
 
 ## Tool versions confirmed present
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| VHS | 0.11.0 | `~/go/bin/vhs`; needs `VHS_NO_SANDBOX=1` as root |
-| ttyd | 1.7.4 | `/usr/local/bin/ttyd`; VHS dependency |
-| asciinema | 3.2.0 | Alternative to VHS; config fix needed (see below) |
-| Playwright (Python) | 1.58.0 | Chromium browser present |
-| ffmpeg | 7.1.3 | With libx264, GIF, x11grab support |
-| Emacs | 30.2.50 | `/opt-3/emacs-30-lucid/bin/emacs` |
-| Xvfb | 21.1.16 | For Emacs GUI approach |
-| xdotool | 3.20160805 | For Emacs GUI approach |
-| openbox | (installed) | EWMH WM — required for xdotool in Xvfb |
-| imagemagick | 7.1.1.43 | `identify`, `convert` for GIF inspection |
-| agg | 0.3.1 | Python; converts asciinema `.cast` → `.gif` (alternative pipeline) |
+| Tool | Version | Location | Notes |
+|------|---------|----------|-------|
+| VHS | 0.11.0 | `~/go/bin/vhs` | Install: `go install github.com/charmbracelet/vhs@latest`; needs `VHS_NO_SANDBOX=1` as root |
+| ttyd | 1.7.7 | `/opt-3/ttyd/bin/ttyd` | **Not** at `/usr/local/bin` — must add `/opt-3/ttyd/bin` to PATH |
+| asciinema | 3.2.0 | `$PATH` | Alternative to VHS; config fix needed (see below) |
+| Playwright (Python) | 1.58.0 | pip | Chromium browser present |
+| ffmpeg | 7.1.3 | `/usr/bin/ffmpeg` | With libx264, GIF, x11grab support |
+| Emacs | 30.2.50 | `/opt-3/emacs-30-lucid/bin/emacs` | For Emacs GUI approach |
+| Xvfb | 21.1.16 | `/usr/bin/Xvfb` | For Emacs GUI approach |
+| xdotool | 3.20160805 | `/usr/bin/xdotool` | For Emacs GUI approach |
+| openbox | (installed) | `/usr/bin/openbox` | EWMH WM — required for xdotool in Xvfb |
+| imagemagick | 7.1.1.43 | `/usr/bin/identify` | `identify`, `convert` for GIF inspection |
+| agg | 0.3.1 | pip | Converts asciinema `.cast` → `.gif` (alternative pipeline) |
 
 ### asciinema config fix required
 
@@ -239,8 +246,9 @@ pause_key = "C-p"
 
 ## Format recommendations for the README
 
-- **CLI demo** → `.gif` (small, 80–150 KB, embeds inline in GitHub Markdown)
-- **TUI demo** → `.gif` (slightly larger, ~200–400 KB)
+- **CLI demo** → `.gif` embeds inline in GitHub Markdown (actual: 903 KB at 1200×600); or
+  `.mp4` via `<video>` tag if file size matters (actual: 553 KB)
+- **TUI demo** → `.gif` (actual: 469 KB at 1600×700) or `.mp4` (actual: 251 KB)
 - **Web UI demo** → `.mp4` referenced via `<video>` tag, or hosted on a CDN; GIF at
   reduced resolution (960px) if inline embedding is required
 - **Emacs demo** → `.gif` via VHS terminal approach
