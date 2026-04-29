@@ -26,3 +26,5 @@ Here's a sample setup:
   (memoryelaine-password "changeme")
   (memoryelaine-username "admin"))
 ```
+
+![Screenshot](https://github.com/bjodah/memoryelaine/blob/db7048b0d6be135868fb5a5426a737c843217ff1/demos/demo-emacs-gui.jpg)
