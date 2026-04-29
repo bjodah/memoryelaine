@@ -1,5 +1,5 @@
 variables:
-  - &ci_image 'cont-reg.bjodah.se:443/bjodah/triceratops-5:26'
+  ci_image: &ci_image 'cont-reg.bjodah.se:443/bjodah/triceratops-5:28'
 
 when:
   - event: [push]
@@ -10,7 +10,11 @@ steps:
     image: *ci_image
     commands:
       - curl -LO ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/cache-ci.tar || true
-    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
+    environment:
+      ARTIFACTS_PASS:
+        from_secret: ARTIFACTS_PASS
+      FTP_SERVER:
+        from_secret: FTP_SERVER
     when:
      - event: push
        repo: bjodah/memoryelaine
@@ -24,7 +28,11 @@ steps:
       - find $(bash -lc 'go env GOMODCACHE') -type f -mtime +90 -exec rm {} \;
       - tar -C / -cf cache-ci.tar $(bash -lc 'go env GOMODCACHE')
       - curl -T cache-ci.tar ftp://memoryelaine:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/
-    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
+    environment:
+      ARTIFACTS_PASS:
+        from_secret: ARTIFACTS_PASS
+      FTP_SERVER:
+        from_secret: FTP_SERVER
     when:
      - event: push
        repo: bjodah/memoryelaine
