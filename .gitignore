@@ -1,3 +1,5 @@
 memoryelaine
 memoryelaine.db
 config.yaml
+memoryelaine.db-shm
+memoryelaine.db-wal

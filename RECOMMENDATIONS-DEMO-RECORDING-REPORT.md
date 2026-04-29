@@ -7,7 +7,7 @@
 | 4 – CLI | ⭐⭐⭐ **Easiest** | VHS | `.gif` |
 | 3 – TUI | ⭐⭐⭐ **Easiest** | VHS | `.gif` |
 | 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` |
-| 1 – Emacs | ⭐ **Hardest** | VHS (`emacs -nw`) | `.gif` |
+| 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` |
 
 **Start with CLI and TUI** — they share a toolchain, share seed infrastructure, and each
 takes under 30 minutes end-to-end. Tackle Web UI next. Leave Emacs for last.
@@ -153,23 +153,32 @@ export VHS_NO_SANDBOX=1
 
 ### Demo 1 — Emacs client
 
-**Feasibility: ⭐ — Hardest, but viable**
+**Feasibility: ⭐⭐ — Two verified approaches; terminal path is simpler**
 
-- Emacs 30.2.50 is available and the package loads cleanly
-- **Terminal mode (`-nw`) via VHS** is the recommended path — avoids X11/xdotool fragility
-- **Key challenge:** the `memoryelaine` buffer workflow requires `M-x memoryelaine` which
-  in VHS is `Alt+x`. This may or may not be passed through correctly by ttyd/VHS. An
-  alternative is to pre-call `(memoryelaine)` via `--eval` when launching Emacs, so the
-  buffer opens immediately without an M-x step.
-- **Second challenge:** the package makes async HTTP calls to the management server using
-  `curl` subprocesses. These add ~50–200ms latency per API call. VHS `Sleep` durations
-  need generous padding (3–5s) around buffer-opening steps.
-- **Third challenge:** Emacs startup in a cold terminal takes ~2–4 seconds. The seed
-  server must be running and responding before Emacs is launched.
-- The GUI approach (Xvfb + ffmpeg + xdotool) was also verified but is harder to script
-  reliably due to timing sensitivity.
+Both the terminal (`-nw`) and GUI approaches were verified end-to-end:
 
-**Effort:** ~4–6 hours (Emacs startup tuning, key injection testing, timing calibration)
+**Approach A: Terminal mode (`-nw`) via VHS**
+- Emacs 30.2.50 loads the `memoryelaine` package cleanly in `-nw` mode
+- VHS tape automates key injection via ttyd; use `--eval '(memoryelaine)'` on startup to
+  skip the M-x minibuffer step and avoid timing issues
+- Same toolchain as CLI/TUI demos — minimal additional setup
+- Add generous `Sleep 4s–5s` around steps that trigger async HTTP curl calls
+
+**Approach B: GUI via Xvfb + openbox + ffmpeg + xdotool**
+- **Verified working** — `*memoryelaine*` buffer populated with 5 log entries in screenshot
+- Requires: `openbox` (EWMH WM for xdotool), `env -u EMACS_SOCKET` (sandbox sets this var
+  to an existing daemon socket — without clearing it, Lucid exits silently), `setsid` (not
+  `nohup`) to detach properly
+- Window lookup: `xdotool search --class "Emacs"` returns 3 IDs; filter by window name
+- `xdotool windowfocus --sync $WIN` prints a `BadMatch` X error that is non-fatal
+- More timing-sensitive than Approach A but produces a more visually impressive recording
+
+**Common pitfalls:**
+- `EMACS_SOCKET` env var must be unset — this is the #1 silent failure cause
+- Refresh key is `g` (not `r`); `R` toggles recording mode; `s` edits the query
+- Allow ≥5 seconds after opening the buffer for async HTTP to complete
+
+**Effort:** ~3–4 hours (Approach A); ~5–6 hours (Approach B or both)
 
 ---
 
@@ -190,10 +199,11 @@ export VHS_NO_SANDBOX=1
 | `scripts/start-demo-server.sh` | Launches server with demo config, writes PID file |
 | `scripts/stop-demo-server.sh` | Kills server by PID |
 | `scripts/record-webui.py` | Playwright recording script for Web UI demo |
+| `scripts/record-emacs-gui.sh` | Shell + xdotool script for GUI Emacs demo |
 | `demos/demo-config.yaml` | Config pointing to `demos/demo.db`, port 18677/18687 |
 | `demos/demo-cli.tape` | VHS tape for CLI demo |
 | `demos/demo-tui.tape` | VHS tape for TUI demo |
-| `demos/demo-emacs.tape` | VHS tape for Emacs demo |
+| `demos/demo-emacs-tui.tape` | VHS tape for Emacs terminal (`-nw`) demo |
 
 ---
 
@@ -209,6 +219,7 @@ export VHS_NO_SANDBOX=1
 | Emacs | 30.2.50 | `/opt-3/emacs-30-lucid/bin/emacs` |
 | Xvfb | 21.1.16 | For Emacs GUI approach |
 | xdotool | 3.20160805 | For Emacs GUI approach |
+| openbox | (installed) | EWMH WM — required for xdotool in Xvfb |
 | imagemagick | 7.1.1.43 | `identify`, `convert` for GIF inspection |
 | agg | 0.3.1 | Python; converts asciinema `.cast` → `.gif` (alternative pipeline) |
 
