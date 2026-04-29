@@ -2,7 +2,7 @@
 
 memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible inference APIs. It sits transparently between clients and one fixed upstream provider. Its primary purpose is to proxy requests with no intentional buffering of active streams while asynchronously logging selected request/response pairs, timings, and HTTP metadata to a local SQLite database.
 
-> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
+> AI DISCLOSURE 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
 
 ## Quick Start
 
@@ -22,6 +22,27 @@ Once the proxy is running:
 - Browse the management UI on `management.listen_addr`
 - Inspect logs with `memoryelaine log` or `memoryelaine tui`
 - ...or from Emacs via [./emacs-memoryelaine/](./emacs-memoryelaine/)
+
+## Demo screencasts
+
+### Web UI
+<p align="center" width="100%">
+<video src="https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-webui.mp4" width="80%" controls></video>
+</p>
+
+
+### Emacs UI
+<p align="center" width="100%">
+<video src="https://raw.githubusercontent.com/bjodah/memoryelaine/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/emacs-gui.mp4" width="80%" controls></video>
+</p>
+
+### Text UI (TUI)
+[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.jpg)](https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.mp4)
+
+
+### Command line interface (CLI)
+https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-cli.mp4
+
 
 ## Core Commands
 
