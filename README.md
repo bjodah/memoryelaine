@@ -2,7 +2,7 @@
 
 memoryelaine is a single-binary Go middleware proxy for OpenAI-compatible inference APIs. It sits transparently between clients and one fixed upstream provider. Its primary purpose is to proxy requests with no intentional buffering of active streams while asynchronously logging selected request/response pairs, timings, and HTTP metadata to a local SQLite database.
 
-> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
+> AI DISCLOSURE 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
 
 ## Quick Start
 
@@ -22,6 +22,28 @@ Once the proxy is running:
 - Browse the management UI on `management.listen_addr`
 - Inspect logs with `memoryelaine log` or `memoryelaine tui`
 - ...or from Emacs via [./emacs-memoryelaine/](./emacs-memoryelaine/)
+
+## Demo screencasts
+
+### Web UI
+<p align="center" width="100%">
+<video src="https://github.com/user-attachments/assets/ea423f00-ae38-4c7a-b29e-cfdbf10e0282" width="80%" controls></video>
+<!-- https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-webui.mp4 -->
+</p>
+
+### Emacs UI
+[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/db7048b0d6be135868fb5a5426a737c843217ff1/demos/demo-emacs-gui.jpg)](https://github.com/user-attachments/assets/3e981111-9591-4164-8823-c78c9504c502)
+<!-- https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-emacs-gui.mp4 -->
+
+### Text UI (TUI)
+[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/29e9018647957ba2078b0ede58a1c4d3d845bd63/demos/demo-tui.jpg)](https://github.com/user-attachments/assets/e5733a55-6c52-4fe4-a7ee-806be7ac29ce)
+<!-- https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.mp4 -->
+
+
+### Command line interface (CLI)
+[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/db7048b0d6be135868fb5a5426a737c843217ff1/demos/demo-cli.jpg)](https://github.com/user-attachments/assets/f0300b6a-d968-42f1-9797-6592a30580f3)
+<!-- https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-cli.mp4 -->
+
 
 ## Core Commands
 
