@@ -37,7 +37,7 @@ Once the proxy is running:
 </p>
 
 ### Text UI (TUI)
-[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.jpg)](https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.mp4)
+[![Watch TUI demo video](https://github.com/bjodah/memoryelaine/blob/29e9018647957ba2078b0ede58a1c4d3d845bd63/demos/demo-tui.jpg)](https://github.com/bjodah/memoryelaine/blob/b8bf7ad0c6f630d1cafeedbc62aa00f5ea868efb/demos/demo-tui.mp4)
 
 
 ### Command line interface (CLI)
