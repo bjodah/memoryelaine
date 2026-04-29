@@ -193,7 +193,7 @@ Optional SECTION selects assembled sub-content: \"all\", \"content\", or \"reaso
       (memoryelaine-show--insert-field "Status" (let ((s (alist-get 'status_code entry)))
                                                   (if s (number-to-string s) "—")))
       (let ((err (alist-get 'error entry)))
-        (when err
+        (when (and err (not (eq err :null)))
           (memoryelaine-show--insert-field "Error" err)))
       (insert "\n")
 
@@ -254,14 +254,15 @@ Optional SECTION selects assembled sub-content: \"all\", \"content\", or \"reaso
 
 (defun memoryelaine-show--insert-headers (headers)
   "Insert HEADERS alist as formatted key: value lines."
-  (if (or (null headers) (and (listp headers) (null (car headers))))
+  (if (or (null headers) (eq headers :null)
+          (and (listp headers) (null (car headers))))
       (insert "  (none)\n")
     (dolist (pair headers)
       (let ((key (car pair))
             (val (cdr pair)))
         (insert (format "  %s: %s\n"
                         key
-                        (if (listp val)
+                        (if (and (listp val) (not (eq val :null)))
                             (mapconcat (lambda (v) (format "%s" v)) val ", ")
                           (format "%s" val))))))))
 
