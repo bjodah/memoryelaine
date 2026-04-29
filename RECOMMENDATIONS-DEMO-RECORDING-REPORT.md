@@ -6,14 +6,15 @@
 |------|------------|-----------------|--------|--------|
 | 4 – CLI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
 | 3 – TUI | ⭐⭐⭐ **Easiest** | VHS | `.gif` + `.mp4` | ✅ **Done** |
-| 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` | ⏳ Pending |
+| 2 – Web UI | ⭐⭐ **Moderate** | Playwright → ffmpeg | `.mp4` / `.gif` | ✅ **Done** |
 | 1 – Emacs | ⭐⭐ **Moderate** | VHS (`emacs -nw`) or Xvfb+ffmpeg (GUI) | `.gif` / `.mp4` | ✅ **Done** |
 
-**CLI, TUI, and Emacs recordings are complete.** Output files in `demos/`:
+**All recordings are complete.** Output files in `demos/`:
 - `demos/demo-cli.gif` (903 KB, 1200×600) + `demos/demo-cli.mp4` (553 KB)
 - `demos/demo-tui.gif` (469 KB, 1600×700) + `demos/demo-tui.mp4` (251 KB)
 - `demos/demo-emacs-tui.gif` (324 KB, 1200×700) + `demos/demo-emacs-tui.mp4` (277 KB)
 - `demos/demo-emacs-gui.gif` (725 KB, 960×600) + `demos/demo-emacs-gui.mp4` (788 KB, 1280×800)
+- `demos/demo-webui.gif` (1.7 MB, 960×600) + `demos/demo-webui.mp4` (603 KB, 1280×800)
 
 ---
 
@@ -145,18 +146,26 @@ At FontSize=14, Width=1200 ≈ 140 terminal columns; Height=600 ≈ 35 rows.
 
 ### Demo 2 — Web UI
 
-**Feasibility: ⭐⭐ — Verified working, some post-processing needed**
+**Feasibility: ⭐⭐ — ✅ Recording complete**
 
-- Playwright with `--no-sandbox` successfully loaded the WebUI and recorded `.webm`
-- Must use `127.0.0.1` (not `localhost`) — verified
-- `ffmpeg` converts `.webm` → `.mp4` reliably
-- GIF conversion is possible but large (use 960px width at 10fps for <8 MB)
-- **Watch out for:** the JS app fetches `/api/logs` after page load; wait for `networkidle`
-  before sending keyboard events. Tested and works.
-- The recording script needs careful timing between scenes to avoid capturing
-  half-rendered states
+- Playwright with `--no-sandbox` successfully recorded headless Chromium → `.webm` → `.mp4` + `.gif`
+- **Output:** `demos/demo-webui.mp4` (603 KB, 1280×800, 24.96s) + `demos/demo-webui.gif` (1.7 MB, 960×600)
 
-**Effort:** ~2–3 hours (write + tune Playwright script, post-process video)
+**Demo covers:** table with 12 colored entries → `?` help overlay → detail panel → conversation view →
+`quantum` FTS query → `is:error` query filter → `R` recording toggle.
+
+**Pitfalls encountered:**
+- Server and Playwright script **must run in the same shell session** — the server is a
+  background job that dies when its shell session ends; separate bash tool calls get a new
+  session, so the server is already dead when Python runs. Solution: `server & PY_SCRIPT; kill $!`
+- **Focus trap after query `Enter`:** focus stays on the query input; `j` key types into the
+  filter instead of navigating rows. Fix: press `Escape` after `Enter` to blur before navigating.
+- The `v` toggle (raw/assembled) only works for SSE-streaming entries (`assembled_available=true`);
+  non-streaming entries show a toast. Replaced with `c` (conversation view) in the demo.
+- Use credentials matching `demos/demo-config.yaml` (`demo`/`demo1234`), not the plan template
+  values (`admin`/`changeme`).
+
+**Effort:** ~1 hour (including debugging focus trap and session lifetime issues)
 
 ---
 
@@ -218,7 +227,7 @@ similarly. All 55 Emacs unit tests still pass.
 | `scripts/demo-seed-db.py` | Creates `demos/demo.db` with 12 realistic rows | ✅ Created |
 | `scripts/start-demo-server.sh` | Launches server with demo config, writes PID file | ✅ Created |
 | `scripts/stop-demo-server.sh` | Kills server by PID | ✅ Created |
-| `scripts/record-webui.py` | Playwright recording script for Web UI demo | ⏳ Pending |
+| `scripts/record-webui.py` | Playwright recording script for Web UI demo | ✅ Created |
 | `scripts/record-emacs-gui.sh` | Shell + xdotool script for GUI Emacs demo | ✅ Created |
 | `demos/demo-config.yaml` | Config pointing to `demos/demo.db`, port 18677/18687 | ✅ Created |
 | `demos/demo-cli.tape` | VHS tape for CLI demo | ✅ Created |

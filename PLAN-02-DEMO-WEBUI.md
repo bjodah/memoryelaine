@@ -16,11 +16,24 @@ the log table, filtering with the query DSL, opening a detail panel, and togglin
 | `--no-sandbox` flag works | ✅ verified (required when running as root) |
 | `record_video_dir` produces `.webm` | ✅ verified |
 | ffmpeg WebM→MP4 conversion | ✅ verified |
-| Management server + seed DB | ✅ Playwright successfully loaded the WebUI with 5 rows |
+| Management server + seed DB | ✅ Playwright successfully loaded the WebUI with 12 rows |
 
-**Key finding:** Playwright must connect via `127.0.0.1` (not `localhost`) — connection
-refused otherwise. Use `http_credentials` context option for Basic Auth instead of URL-embedded
-credentials.
+**Key findings:**
+- Playwright must connect via `127.0.0.1` (not `localhost`) — connection refused otherwise
+- Use `http_credentials` context option for Basic Auth instead of URL-embedded credentials
+- **Critical:** server and Playwright script must run in the **same shell session** — the server
+  is launched as a background job `&` and will die when the bash session ends. Running
+  `./server &` in one call and `python3 script.py` in a second call will fail with
+  `ERR_CONNECTION_REFUSED` because the server is dead between sessions. Solution: start
+  server, run script, kill server — all in one shell command chain.
+- **Focus trap after query submit:** pressing `Enter` in the query filter leaves focus on the
+  input. `j` keypresses while the input is focused type into the filter instead of navigating.
+  Fix: press `Escape` after `Enter` to blur the filter before sending navigation keys.
+- The `v` toggle (raw/assembled) only works when `sv.assembled_available` is true — i.e., for
+  SSE-streaming entries. For non-streaming entries it shows a toast "Assembled response view is
+  not available". Skip this scene or use a streaming entry.
+- Credentials: `demo`/`demo1234` (the plan template used `admin`/`changeme` — must match
+  the actual `demos/demo-config.yaml`)
 
 ---
 
@@ -171,17 +184,34 @@ ffmpeg -i demos/demo-webui.mp4 \
 
 ---
 
-## Scene outline (approximately 20 seconds total)
+## Scene outline (approximately 25 seconds total)
 
-| # | What's shown | Duration |
-|---|--------------|----------|
-| 1 | Page loads, log table visible with 12 entries | 2 s |
-| 2 | Keyboard `j` navigation highlights rows | 1.5 s |
-| 3 | Enter opens detail panel, shows metadata + body preview | 3 s |
-| 4 | `v` toggles Raw SSE → Assembled content | 2 s |
-| 5 | Escape closes panel, back to table | 1 s |
-| 6 | `/` focuses query box, type `status:200`, Enter filters | 3 s |
-| 7 | `R` toggles recording indicator OFF then ON | 2 s |
+| # | What's shown | Duration | Notes |
+|---|--------------|----------|-------|
+| 1 | Page loads, log table visible with 12 entries | 2 s | colorful status codes (200/400/500) |
+| 2 | `?` shows keyboard shortcuts + Query DSL help overlay | 2 s | great intro for audience |
+| 3 | Escape closes help, `j j j` navigate to row 10 | 1.5 s | |
+| 4 | Enter opens detail panel (Log #9/10), request JSON visible | 2.5 s | |
+| 5 | `c` shows conversation view | 2 s | always works for any entry |
+| 6 | Escape closes detail | 0.8 s | |
+| 7 | `/` focuses query, type `quantum`, Enter filters | 2.5 s | FTS demo |
+| 8 | Escape blurs input, `j` + Enter opens quantum detail (Log #3) | 2.5 s | |
+| 9 | Escape closes detail, `/` Ctrl+A type `is:error`, Enter | 2 s | shows 2 error rows |
+| 10 | `R` toggles Recording: PAUSED, `R` toggles back ON | 2.5 s | unique feature |
+
+**Note:** Step 7→8 requires pressing `Escape` after `Enter` to blur the query input before
+sending `j` — otherwise `j` types into the filter instead of navigating.
+
+---
+
+## Output produced
+
+| File | Size | Notes |
+|------|------|-------|
+| `demos/demo-webui.mp4` | 603 KB, 1280×800, 24.96s | Full WebUI recording |
+| `demos/demo-webui.gif` | 1.7 MB, 960×600, 10fps | Two-pass palette GIF |
+
+Recording was produced with `scripts/record-webui.py` using Playwright headless Chromium.
 
 ---
 

@@ -1,2 +1,4 @@
 demo.db
 memoryelaine
+*.db-shm
+*.db-wal
